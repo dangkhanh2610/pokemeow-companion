@@ -37,7 +37,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   common: {
     tier: 'common',
     label: 'Common',
-    weight: 59,
+    weight: 60,
     colorHex: 0x94a3b8,
     badgeCss: 'bg-slate-500/20 text-slate-300 border-slate-500/40',
     xpReward: 25,
@@ -53,7 +53,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   rare: {
     tier: 'rare',
     label: 'Rare',
-    weight: 11,
+    weight: 10.5,
     colorHex: 0x3b82f6,
     badgeCss: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
     xpReward: 90,
@@ -61,7 +61,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   super_rare: {
     tier: 'super_rare',
     label: 'Super Rare',
-    weight: 1.8,
+    weight: 1.4,
     colorHex: 0xa855f7,
     badgeCss: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
     xpReward: 180,
@@ -69,7 +69,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   legendary: {
     tier: 'legendary',
     label: 'Legendary',
-    weight: 0.2,
+    weight: 0.1,
     colorHex: 0xf59e0b,
     badgeCss: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
     xpReward: 400,

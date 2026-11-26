@@ -176,25 +176,31 @@ export function buildThrowingEmbed(
   ballId: BallId,
 ): EmbedBuilder {
   const ball = getBallSpec(ballId);
-  const ballMention = botEmojiRegistry.getBallMention(ballId);
+  const shakeMention = botEmojiRegistry.getBallShakeMention(ballId);
+  const shakeGifUrl = botEmojiRegistry.getBallShakeGifUrl(ballId);
   const shinyPrefix = isShiny ? '★ SHINY · ' : '';
   const spriteUrl = isShiny ? species.shinyAnimatedSpriteUrl : species.animatedSpriteUrl;
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setColor(0xf59e0b)
     .setAuthor({
-      name: `${ball.name}  ·  Đang ném bóng`,
+      name: `${ball.name}  ·  Đang thu phục`,
       iconURL: ball.iconUrl,
     })
     .setTitle(`${shinyPrefix}${formatDexNo(species.dexNumber)}  ${species.name}`)
     .setDescription(
       [
-        `**${trainerDisplayName}** đã ném ${ballMention} **${ball.name}**`,
-        '`◦ ◦ ◦`  Quả bóng đang rung lắc...',
+        `${shakeMention} **${trainerDisplayName}** đã ném **${ball.name}**!`,
+        'Quả bóng đang rung lắc dữ dội... Chờ xem kết quả!',
       ].join('\n'),
     )
     .setThumbnail(spriteUrl)
-    .setFooter({ text: 'PokeNyan  ·  Đang chờ kết quả' });
+    .setFooter({ text: 'PokeNyan  ·  Đang chờ kết quả bắt' });
+
+  if (shakeGifUrl) {
+    embed.setImage(shakeGifUrl);
+  }
+  return embed;
 }
 
 export function buildCatchResultEmbed(

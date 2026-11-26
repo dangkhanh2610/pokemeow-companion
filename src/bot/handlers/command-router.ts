@@ -982,7 +982,7 @@ export class BotCommandRouter {
 
     const [, profile] = await Promise.all([
       new Promise<void>((resolve) => {
-        setTimeout(resolve, 1250);
+        setTimeout(resolve, 1650);
       }),
       trainerService.getTrainerProfile(interaction.user.id),
     ]);

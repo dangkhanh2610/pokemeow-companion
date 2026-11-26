@@ -53,10 +53,10 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.ok(catalog.search('dragon').length >= 1);
     assert.equal(catalog.findMegaByQuery('rayquaza')?.name, 'Rayquaza-Mega');
     assert.equal(catalog.findMegaByQuery('charizard x')?.name, 'Charizard-Mega-X');
-    assert.equal(RARITY_CONFIGS.legendary.weight, 0.2);
+    assert.equal(RARITY_CONFIGS.legendary.weight, 0.1);
     assert.equal(RARITY_CONFIGS.mega.weight, 0);
-    assert.equal(SHINY_CHANCE, 1 / 2048);
-    assert.equal(ENCOUNTER_TTL_MS, 20_000);
+    assert.equal(SHINY_CHANCE, 1 / 4096);
+    assert.equal(ENCOUNTER_TTL_MS, 7_000);
 
     // Đảm bảo SpawnEngine không bao giờ spawn ra Mega ngoài tự nhiên
     for (let i = 0; i < 500; i += 1) {

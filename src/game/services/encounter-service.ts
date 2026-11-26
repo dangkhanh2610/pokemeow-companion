@@ -13,7 +13,7 @@ import {
 } from './trainer-service';
 
 export const WILD_COOLDOWN_MS = 8_000;
-export const ENCOUNTER_TTL_MS = 20_000;
+export const ENCOUNTER_TTL_MS = 7_000;
 const RESCUE_COOLDOWN_MS = 30 * 60 * 1000;
 const RESCUE_POKEBALL_GRANT = 3;
 

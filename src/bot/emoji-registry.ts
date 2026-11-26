@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import {
   REST,
   type RESTGetAPIApplicationEmojisResult,
@@ -10,13 +12,16 @@ import type { BallId } from '@/game/types';
 export interface StoredAppEmoji {
   readonly id: string;
   readonly name: string;
+  readonly animated: boolean;
 }
 
 const EMOJI_PREFIX = 'pn_';
+const SHAKE_PREFIX = 'pn_shake_';
 const LEGACY_PREFIX = 'pv_';
 
 export class EmojiRegistry {
-  private readonly emojis = new Map<BallId, StoredAppEmoji>();
+  private readonly staticEmojis = new Map<BallId, StoredAppEmoji>();
+  private readonly shakeEmojis = new Map<BallId, StoredAppEmoji>();
 
   public async syncAndLoad(token: string, clientId: string): Promise<void> {
     const rest = new REST({ version: '10' }).setToken(token);
@@ -37,11 +42,15 @@ export class EmojiRegistry {
     const byName = new Map<string, StoredAppEmoji>();
     for (const item of existingItems) {
       if (item.id && item.name) {
-        byName.set(item.name, { id: item.id, name: item.name });
+        byName.set(item.name, {
+          id: item.id,
+          name: item.name,
+          animated: Boolean(item.animated),
+        });
       }
     }
 
-    // Dọn các emoji pixel cũ (pv_*) nếu còn tồn tại để tránh trùng lặp
+    // Dọn emoji cũ pv_* nếu còn
     for (const ball of BALL_CATALOG) {
       const legacy = byName.get(`${LEGACY_PREFIX}${ball.id}`);
       if (legacy) {
@@ -51,11 +60,12 @@ export class EmojiRegistry {
       }
     }
 
+    // 1) Sync static HD Poké Ball icons
     for (const ball of BALL_CATALOG) {
       const targetName = `${EMOJI_PREFIX}${ball.id}`;
       const existing = byName.get(targetName);
       if (existing) {
-        this.emojis.set(ball.id, existing);
+        this.staticEmojis.set(ball.id, existing);
         continue;
       }
 
@@ -77,12 +87,55 @@ export class EmojiRegistry {
         })) as RESTPostAPIApplicationEmojiResult;
 
         if (created.id && created.name) {
-          this.emojis.set(ball.id, { id: created.id, name: created.name });
+          this.staticEmojis.set(ball.id, {
+            id: created.id,
+            name: created.name,
+            animated: Boolean(created.animated),
+          });
           console.log(`[EmojiRegistry] Đã tải lên HD Application Emoji: :${created.name}:`);
         }
       } catch (error) {
         console.warn(
-          `[EmojiRegistry] Không thể upload emoji cho ${ball.id}, dùng ký hiệu mặc định:`,
+          `[EmojiRegistry] Không thể upload emoji cho ${ball.id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+
+    // 2) Sync animated shaking Poké Ball GIFs
+    for (const ball of BALL_CATALOG) {
+      const targetName = `${SHAKE_PREFIX}${ball.id}`;
+      const existing = byName.get(targetName);
+      if (existing) {
+        this.shakeEmojis.set(ball.id, existing);
+        continue;
+      }
+
+      try {
+        const gifPath = resolve(process.cwd(), 'public', 'balls', `shake-${ball.id}.gif`);
+        const buffer = await readFile(gifPath);
+        const dataUri = `data:image/gif;base64,${buffer.toString('base64')}`;
+
+        const body: RESTPostAPIApplicationEmojiJSONBody = {
+          name: targetName,
+          image: dataUri,
+        };
+
+        const created = (await rest.post(route, {
+          body,
+        })) as RESTPostAPIApplicationEmojiResult;
+
+        if (created.id && created.name) {
+          this.shakeEmojis.set(ball.id, {
+            id: created.id,
+            name: created.name,
+            animated: true,
+          });
+          console.log(`[EmojiRegistry] Đã tải lên Animated Shake Emoji: :${created.name}:`);
+        }
+      } catch (error) {
+        console.warn(
+          `[EmojiRegistry] Không thể upload animated emoji cho ${ball.id}:`,
           error instanceof Error ? error.message : error,
         );
       }
@@ -90,17 +143,33 @@ export class EmojiRegistry {
   }
 
   public getBallMention(ballId: BallId): string {
-    const entry = this.emojis.get(ballId);
+    const entry = this.staticEmojis.get(ballId);
     if (entry) {
       return `<:${entry.name}:${entry.id}>`;
     }
     return getBallSpec(ballId).emoji;
   }
 
+  public getBallShakeMention(ballId: BallId): string {
+    const entry = this.shakeEmojis.get(ballId);
+    if (entry) {
+      return `<a:${entry.name}:${entry.id}>`;
+    }
+    return this.getBallMention(ballId);
+  }
+
+  public getBallShakeGifUrl(ballId: BallId): string | null {
+    const entry = this.shakeEmojis.get(ballId);
+    if (!entry) {
+      return null;
+    }
+    return `https://cdn.discordapp.com/emojis/${entry.id}.gif?size=128&quality=lossless`;
+  }
+
   public getBallButtonEmoji(
     ballId: BallId,
   ): string | { readonly id: string; readonly name: string } {
-    const entry = this.emojis.get(ballId);
+    const entry = this.staticEmojis.get(ballId);
     if (entry) {
       return { id: entry.id, name: entry.name };
     }
