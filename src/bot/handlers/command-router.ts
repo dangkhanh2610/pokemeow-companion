@@ -21,6 +21,7 @@ import {
   buildProfileEmbed,
   buildReleaseEmbed,
   buildShopEmbed,
+  buildThrowingEmbed,
   buildWildEncounterEmbed,
 } from '../ui/embeds';
 
@@ -348,7 +349,6 @@ export class BotCommandRouter {
     }
 
     const meta = extractTrainerMeta(interaction.user);
-    const profile = await trainerService.getTrainerProfile(interaction.user.id);
     const emptyInventory: Record<BallId, number> = {
       pokeball: 0,
       greatball: 0,
@@ -358,6 +358,18 @@ export class BotCommandRouter {
     };
 
     await interaction.update({
+      embeds: [buildThrowingEmbed(meta.displayName, outcome.species, outcome.isShiny, outcome.ballId)],
+      components: [buildCatchButtonsRow(encounterId, emptyInventory, true)],
+    });
+
+    const [, profile] = await Promise.all([
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 1250);
+      }),
+      trainerService.getTrainerProfile(interaction.user.id),
+    ]);
+
+    await interaction.editReply({
       embeds: [buildCatchResultEmbed(meta.displayName, outcome)],
       components: [buildCatchButtonsRow(encounterId, profile?.balls ?? emptyInventory, true)],
     });

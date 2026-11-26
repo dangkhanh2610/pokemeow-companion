@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/game/__tests__/*.test.ts",
     "bot:register": "tsx src/bot/register-commands.ts",
+    "bot:sync-emojis": "tsx src/bot/scripts/sync-emojis.ts",
     "bot:dev": "tsx src/bot/index.ts"
   },
   "dependencies": {

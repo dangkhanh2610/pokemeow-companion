@@ -1,9 +1,11 @@
 import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { loadBotConfig } from './config';
+import { botEmojiRegistry } from './emoji-registry';
 import { BotCommandRouter } from './handlers/command-router';
 
 async function bootstrapBot(): Promise<void> {
   const config = loadBotConfig();
+  await botEmojiRegistry.syncAndLoad(config.token, config.clientId);
   const router = new BotCommandRouter(config.prefix, config.botName);
 
   const client = new Client({

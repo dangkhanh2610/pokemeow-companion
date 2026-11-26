@@ -20,6 +20,8 @@ export interface CreatureSpecies {
   readonly baseReward: number;
   readonly artworkUrl: string;
   readonly shinyArtworkUrl: string;
+  readonly animatedSpriteUrl: string;
+  readonly shinyAnimatedSpriteUrl: string;
 }
 
 export interface RarityConfig {
@@ -39,6 +41,7 @@ export interface BallSpec {
   readonly price: number;
   readonly multiplier: number;
   readonly emoji: string;
+  readonly iconUrl: string;
   readonly description: string;
 }
 

@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import { useMemo, useState } from 'react';
 import { BookOpen, Coins, Crown, RefreshCw, Search, Sparkles, Trophy, Users } from 'lucide-react';
+import { BALL_CATALOG, getBallSpec } from '@/game/catalog/ball-catalog';
 import type {
   CommunityOverview,
   CreatureSpecies,
@@ -309,6 +310,7 @@ export function CommunityPortalClient({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {overview.recentHighlights.map((item) => {
                 const rarityMeta = rarityConfigs[item.rarity];
+                const ball = getBallSpec(item.ballUsed);
                 return (
                   <div
                     key={item.id}
@@ -319,6 +321,7 @@ export function CommunityPortalClient({
                       alt={item.speciesName}
                       width={56}
                       height={56}
+                      unoptimized
                       className="h-14 w-14 shrink-0 rounded-lg bg-slate-950/60 object-contain p-1"
                     />
                     <div className="min-w-0 flex-1">
@@ -338,6 +341,15 @@ export function CommunityPortalClient({
                         <span className="font-mono text-[11px] text-slate-300 tabular-nums">
                           {item.ivPercent}% IV
                         </span>
+                        <Image
+                          src={ball.iconUrl}
+                          alt={ball.name}
+                          title={ball.name}
+                          width={18}
+                          height={18}
+                          unoptimized
+                          className="ml-auto h-4.5 w-4.5 object-contain"
+                        />
                       </div>
                     </div>
                   </div>
@@ -381,6 +393,30 @@ export function CommunityPortalClient({
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5">
+            {BALL_CATALOG.map((ball) => (
+              <div
+                key={ball.id}
+                className="flex items-center gap-2.5 rounded-xl border border-slate-800/90 bg-slate-950/60 px-3 py-2"
+              >
+                <Image
+                  src={ball.iconUrl}
+                  alt={ball.name}
+                  width={28}
+                  height={28}
+                  unoptimized
+                  className="h-7 w-7 shrink-0 object-contain"
+                />
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-semibold text-white">{ball.name}</p>
+                  <p className="font-mono text-[11px] text-slate-400">
+                    {ball.shortCode.toUpperCase()} • {ball.price.toLocaleString('en-US')} PC
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {filteredCatalog.map((species) => {
               const rarityMeta = rarityConfigs[species.rarity];
@@ -402,13 +438,14 @@ export function CommunityPortalClient({
                     </span>
                   </div>
 
-                  <div className="my-3 flex justify-center">
+                  <div className="my-3 flex h-24 items-center justify-center">
                     <Image
-                      src={species.artworkUrl}
+                      src={species.animatedSpriteUrl}
                       alt={species.name}
                       width={88}
                       height={88}
-                      className="h-22 w-22 object-contain drop-shadow-[0_8px_16px_rgba(0,0,0,0.6)]"
+                      unoptimized
+                      className="max-h-22 w-auto object-contain drop-shadow-[0_8px_16px_rgba(0,0,0,0.6)]"
                     />
                   </div>
 

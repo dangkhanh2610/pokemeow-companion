@@ -21,10 +21,24 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.ok(catalog.getByRarity('legendary').length > 0);
     assert.equal(catalog.getById(25)?.name, 'Pikachu');
     assert.ok(catalog.search('dragon').length >= 1);
+
+    for (const species of all) {
+      assert.ok(
+        species.animatedSpriteUrl.startsWith('https://'),
+        `${species.name} thiếu animatedSpriteUrl hợp lệ`,
+      );
+      assert.ok(
+        species.shinyAnimatedSpriteUrl.startsWith('https://'),
+        `${species.name} thiếu shinyAnimatedSpriteUrl hợp lệ`,
+      );
+    }
   });
 
   it('BallCatalog và resolveBallId phân giải chính xác các bí danh bóng', () => {
     assert.equal(BALL_CATALOG.length, 5);
+    for (const ball of BALL_CATALOG) {
+      assert.ok(ball.iconUrl.startsWith('https://'), `${ball.id} thiếu iconUrl hợp lệ`);
+    }
     assert.equal(resolveBallId('pb'), 'pokeball');
     assert.equal(resolveBallId('GB'), 'greatball');
     assert.equal(resolveBallId('ultra'), 'ultraball');

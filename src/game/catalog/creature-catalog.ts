@@ -67,6 +67,18 @@ function buildShinyArtworkUrl(id: number): string {
   return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/${id}.png`;
 }
 
+function toShowdownSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function buildAnimatedSpriteUrl(name: string): string {
+  return `https://play.pokemonshowdown.com/sprites/ani/${toShowdownSlug(name)}.gif`;
+}
+
+function buildShinyAnimatedSpriteUrl(name: string): string {
+  return `https://play.pokemonshowdown.com/sprites/ani-shiny/${toShowdownSlug(name)}.gif`;
+}
+
 const RAW_POKEMON_SPECIES: readonly RawSpeciesEntry[] = [
   // Common (20)
   { id: 10, name: 'Caterpie', rarity: 'common', types: ['Bug'], baseCatchRate: 0.72, baseReward: 120 },
@@ -149,6 +161,8 @@ export class PokemonCreatureCatalog implements ICreatureCatalog {
       ...entry,
       artworkUrl: buildArtworkUrl(entry.id),
       shinyArtworkUrl: buildShinyArtworkUrl(entry.id),
+      animatedSpriteUrl: buildAnimatedSpriteUrl(entry.name),
+      shinyAnimatedSpriteUrl: buildShinyAnimatedSpriteUrl(entry.name),
     }));
 
     const byId = new Map<number, CreatureSpecies>();

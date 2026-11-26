@@ -5,6 +5,7 @@ import { xpForNextLevel } from '@/game/engine/spawn-engine';
 import type { PaginatedDexResult, TrainerBagSummary } from '@/game/services/trainer-service';
 import type {
   BallId,
+  CreatureSpecies,
   DailyRewardResult,
   EncounterRoll,
   LeaderboardEntry,
@@ -12,6 +13,7 @@ import type {
   ReleaseResult,
   ThrowBallOutcome,
 } from '@/game/types';
+import { botEmojiRegistry } from '../emoji-registry';
 
 const FAN_DISCLAIMER =
   'PokéVerse • Fan-made phi lợi nhuận, không liên kết với Nintendo / The Pokémon Company';
@@ -37,7 +39,7 @@ export function buildCatchButtonsRow(
     return new ButtonBuilder()
       .setCustomId(`catch:${encounterId}:${ball.id}`)
       .setLabel(`${ball.shortCode.toUpperCase()} (${qty})`)
-      .setEmoji(ball.emoji)
+      .setEmoji(botEmojiRegistry.getBallButtonEmoji(ball.id))
       .setStyle(style)
       .setDisabled(disabledAll || qty <= 0);
   });
@@ -51,7 +53,9 @@ export function buildWildEncounterEmbed(
   expiresAt: Date,
 ): EmbedBuilder {
   const rarityMeta = RARITY_CONFIGS[roll.species.rarity];
-  const imageUrl = roll.isShiny ? roll.species.shinyArtworkUrl : roll.species.artworkUrl;
+  const imageUrl = roll.isShiny
+    ? roll.species.shinyAnimatedSpriteUrl
+    : roll.species.animatedSpriteUrl;
   const shinyBanner = roll.isShiny ? '✨ **SHINY!** ' : '';
   const expireEpoch = Math.floor(expiresAt.getTime() / 1000);
 
@@ -70,15 +74,44 @@ export function buildWildEncounterEmbed(
     .setFooter({ text: FAN_DISCLAIMER });
 }
 
+export function buildThrowingEmbed(
+  trainerDisplayName: string,
+  species: CreatureSpecies,
+  isShiny: boolean,
+  ballId: BallId,
+): EmbedBuilder {
+  const ball = getBallSpec(ballId);
+  const ballMention = botEmojiRegistry.getBallMention(ballId);
+  const shinyTag = isShiny ? '✨ Shiny ' : '';
+  const spriteUrl = isShiny ? species.shinyAnimatedSpriteUrl : species.animatedSpriteUrl;
+
+  return new EmbedBuilder()
+    .setColor(0xfbbf24)
+    .setAuthor({
+      name: `${ball.name} đang bay ra...`,
+      iconURL: ball.iconUrl,
+    })
+    .setTitle(`${ballMention} Đang ném **${ball.name}** về phía **${shinyTag}${species.name}**...`)
+    .setDescription(
+      [
+        `Huấn luyện viên: **${trainerDisplayName}**`,
+        '✨ Quả bóng đang rung lắc dữ dội... Chờ kết quả!',
+      ].join('\n'),
+    )
+    .setThumbnail(spriteUrl)
+    .setFooter({ text: FAN_DISCLAIMER });
+}
+
 export function buildCatchResultEmbed(
   trainerDisplayName: string,
   outcome: Extract<ThrowBallOutcome, { readonly ok: true }>,
 ): EmbedBuilder {
   const ball = getBallSpec(outcome.ballId);
+  const ballMention = botEmojiRegistry.getBallMention(outcome.ballId);
   const rarityMeta = RARITY_CONFIGS[outcome.species.rarity];
-  const imageUrl = outcome.isShiny
-    ? outcome.species.shinyArtworkUrl
-    : outcome.species.artworkUrl;
+  const spriteUrl = outcome.isShiny
+    ? outcome.species.shinyAnimatedSpriteUrl
+    : outcome.species.animatedSpriteUrl;
   const shinyTag = outcome.isShiny ? '✨ Shiny ' : '';
   const chancePct = (outcome.catchChance * 100).toFixed(1);
 
@@ -87,41 +120,49 @@ export function buildCatchResultEmbed(
       ? `🎉 **LÊN CẤP!** Bạn đã đạt **Level ${outcome.newLevel}**!`
       : `Cấp hiện tại: **Lv.${outcome.newLevel}**`;
 
-    return new EmbedBuilder()
+    const embed = new EmbedBuilder()
       .setColor(outcome.isShiny ? 0xfacc15 : 0x10b981)
+      .setAuthor({ name: `${ball.name}`, iconURL: ball.iconUrl })
       .setTitle(`✅ Bắt thành công ${shinyTag}${outcome.species.name}!`)
       .setDescription(
         [
           `Huấn luyện viên: **${trainerDisplayName}**`,
-          `Bóng sử dụng: ${ball.emoji} **${ball.name}** (Tỉ lệ: ${chancePct}%)`,
+          `Bóng sử dụng: ${ballMention} **${ball.name}** (Tỉ lệ: ${chancePct}%)`,
           `Độ hiếm: **${rarityMeta.label}** • IVs: **${outcome.ivPercent}%** (${outcome.ivTotal}/186)`,
           `Phần thưởng: **+${formatNumber(outcome.coinsEarned)} PC** • **+${outcome.xpEarned} XP**`,
           `Số dư mới: **${formatNumber(outcome.newCoinsBalance)} PC** • ${levelLine}`,
         ].join('\n'),
       )
-      .setThumbnail(imageUrl)
       .setFooter({ text: FAN_DISCLAIMER });
+
+    if (outcome.isShiny || outcome.species.rarity === 'legendary') {
+      embed.setImage(spriteUrl);
+    } else {
+      embed.setThumbnail(spriteUrl);
+    }
+    return embed;
   }
 
   return new EmbedBuilder()
     .setColor(0xef4444)
+    .setAuthor({ name: `${ball.name}`, iconURL: ball.iconUrl })
     .setTitle(`💨 Ôi không! ${shinyTag}${outcome.species.name} đã chạy thoát!`)
     .setDescription(
       [
         `Huấn luyện viên: **${trainerDisplayName}**`,
-        `Bạn đã ném ${ball.emoji} **${ball.name}** (Tỉ lệ bắt: ${chancePct}%) nhưng thất bại.`,
+        `Bạn đã ném ${ballMention} **${ball.name}** (Tỉ lệ bắt: ${chancePct}%) nhưng thất bại.`,
         `Hãy thử tìm thêm lượt mới bằng \`/p\` hoặc \`;p\` nhé!`,
       ].join('\n'),
     )
-    .setThumbnail(imageUrl)
+    .setThumbnail(spriteUrl)
     .setFooter({ text: FAN_DISCLAIMER });
 }
 
 export function buildShopEmbed(prefix: string): EmbedBuilder {
-  const lines = BALL_CATALOG.map(
-    (ball) =>
-      `${ball.emoji} **${ball.name}** (\`${ball.shortCode}\`) — **${formatNumber(ball.price)} PC**\n└ ${ball.description}`,
-  );
+  const lines = BALL_CATALOG.map((ball) => {
+    const icon = botEmojiRegistry.getBallMention(ball.id);
+    return `${icon} **${ball.name}** (\`${ball.shortCode}\`) — **${formatNumber(ball.price)} PC**\n└ ${ball.description}`;
+  });
 
   return new EmbedBuilder()
     .setColor(0x6366f1)
@@ -137,9 +178,10 @@ export function buildShopEmbed(prefix: string): EmbedBuilder {
 }
 
 export function buildBagEmbed(summary: TrainerBagSummary): EmbedBuilder {
-  const ballLines = BALL_CATALOG.map(
-    (ball) => `${ball.emoji} **${ball.name}** (\`${ball.shortCode}\`): **${summary.balls[ball.id]}**`,
-  );
+  const ballLines = BALL_CATALOG.map((ball) => {
+    const icon = botEmojiRegistry.getBallMention(ball.id);
+    return `${icon} **${ball.name}** (\`${ball.shortCode}\`): **${summary.balls[ball.id]}**`;
+  });
 
   return new EmbedBuilder()
     .setColor(0x0ea5e9)
@@ -242,6 +284,9 @@ export function buildDailyEmbed(
       .setFooter({ text: FAN_DISCLAIMER });
   }
 
+  const pbIcon = botEmojiRegistry.getBallMention('pokeball');
+  const gbIcon = botEmojiRegistry.getBallMention('greatball');
+
   return new EmbedBuilder()
     .setColor(0x10b981)
     .setTitle('🎁 Điểm Danh Hàng Ngày Thành Công!')
@@ -250,7 +295,7 @@ export function buildDailyEmbed(
         `Huấn luyện viên: **${trainerDisplayName}**`,
         `🔥 Chuỗi điểm danh: **${result.streak} ngày**`,
         `💰 Nhận: **+${formatNumber(result.coinsEarned)} PC**`,
-        `🔴 Poké Ball: **+${result.pokeballsEarned}** • 🔵 Great Ball: **+${result.greatballsEarned}**`,
+        `${pbIcon} Poké Ball: **+${result.pokeballsEarned}** • ${gbIcon} Great Ball: **+${result.greatballsEarned}**`,
         `Số dư hiện tại: **${formatNumber(result.newCoinsBalance)} PC**`,
       ].join('\n'),
     )

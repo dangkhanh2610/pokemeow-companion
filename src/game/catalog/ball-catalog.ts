@@ -9,6 +9,7 @@ export const BALL_CATALOG: readonly BallSpec[] = [
     price: 200,
     multiplier: 1.0,
     emoji: '🔴',
+    iconUrl: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/poke-ball.png',
     description: 'Bóng cơ bản dùng để bắt Pokémon phổ thông và nâng cấp bộ sưu tập.',
   },
   {
@@ -19,6 +20,7 @@ export const BALL_CATALOG: readonly BallSpec[] = [
     price: 500,
     multiplier: 1.5,
     emoji: '🔵',
+    iconUrl: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/great-ball.png',
     description: 'Tỉ lệ bắt cao hơn 1.5x so với Poké Ball, phù hợp bắt Uncommon & Rare.',
   },
   {
@@ -29,6 +31,7 @@ export const BALL_CATALOG: readonly BallSpec[] = [
     price: 1500,
     multiplier: 2.2,
     emoji: '🟡',
+    iconUrl: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/ultra-ball.png',
     description: 'Bóng hiệu suất cao (2.2x) dành cho Rare & Super Rare.',
   },
   {
@@ -39,6 +42,8 @@ export const BALL_CATALOG: readonly BallSpec[] = [
     price: 5000,
     multiplier: 3.0,
     emoji: '⚪',
+    iconUrl:
+      'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/premier-ball.png',
     description: 'Bóng đặc biệt (3.0x + thưởng +15% cho Shiny, Super Rare & Legendary).',
   },
   {
@@ -49,6 +54,8 @@ export const BALL_CATALOG: readonly BallSpec[] = [
     price: 100000,
     multiplier: 100.0,
     emoji: '🟣',
+    iconUrl:
+      'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/master-ball.png',
     description: 'Bóng tối thượng — bắt chắc chắn 100% mọi loài kể cả Legendary & Shiny.',
   },
 ];

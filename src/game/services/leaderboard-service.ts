@@ -110,9 +110,11 @@ export class LeaderboardService {
       const rarity: RarityTier = isRarityTier(row.rarity) ? row.rarity : 'rare';
       const ballUsed: BallId = isBallId(row.ballUsed) ? row.ballUsed : 'pokeball';
       const artworkUrl = row.isShiny
-        ? (species?.shinyArtworkUrl ??
+        ? (species?.shinyAnimatedSpriteUrl ??
+          species?.shinyArtworkUrl ??
           `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/${row.speciesId}.png`)
-        : (species?.artworkUrl ??
+        : (species?.animatedSpriteUrl ??
+          species?.artworkUrl ??
           `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${row.speciesId}.png`);
 
       return {
