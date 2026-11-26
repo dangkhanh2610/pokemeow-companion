@@ -18,9 +18,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'PokéVerse — Discord Pokémon RPG Community Portal',
+  title: 'PokeNyan — Discord Pokémon RPG Community Portal',
   description:
-    'Bot Discord Pokémon RPG cộng đồng phi lợi nhuận: săn bắt Pokémon, thu thập Shiny, bảng xếp hạng huấn luyện viên và Pokédex trực tuyến.',
+    'Bot Discord Pokémon RPG cộng đồng phi lợi nhuận: săn bắt đủ 1.025 Pokémon, thu thập Shiny, bảng xếp hạng huấn luyện viên và Pokédex trực tuyến.',
 };
 
 interface RootLayoutProps {

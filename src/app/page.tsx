@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Gamepad2, ShieldCheck, Terminal } from 'lucide-react';
 import { CommunityPortalClient } from '@/components/CommunityPortalClient';
 import { defaultCreatureCatalog, RARITY_CONFIGS } from '@/game/catalog/creature-catalog';
@@ -47,7 +48,7 @@ export default async function HomePage() {
               Discord Pokémon RPG Community
             </div>
             <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-              PokéVerse RPG Portal
+              PokeNyan RPG Portal
             </h1>
             <p className="max-w-2xl text-sm leading-relaxed text-slate-300 sm:text-base">
               Săn bắt Pokémon hoang dã bằng nút bấm trực tiếp trên Discord, thu thập biến thể{' '}
@@ -96,6 +97,21 @@ export default async function HomePage() {
           Dự án cộng đồng phi lợi nhuận, chỉ nhận ủng hộ duy trì server — không liên kết với
           Nintendo / The Pokémon Company.
         </p>
+        <div className="mt-3 flex items-center justify-center gap-4 text-xs font-medium">
+          <Link
+            href="/terms"
+            className="text-indigo-300 underline-offset-4 hover:text-indigo-200 hover:underline"
+          >
+            Điều Khoản Dịch Vụ (Terms)
+          </Link>
+          <span className="text-slate-600">•</span>
+          <Link
+            href="/privacy"
+            className="text-indigo-300 underline-offset-4 hover:text-indigo-200 hover:underline"
+          >
+            Chính Sách Bảo Mật (Privacy)
+          </Link>
+        </div>
       </footer>
     </main>
   );

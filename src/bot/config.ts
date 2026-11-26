@@ -14,7 +14,7 @@ export function loadBotConfig(): BotConfig {
   const clientId = process.env['DISCORD_CLIENT_ID']?.trim() ?? '';
   const rawGuildId = process.env['DISCORD_GUILD_ID']?.trim() ?? '';
   const prefix = process.env['BOT_PREFIX']?.trim() || ';';
-  const botName = process.env['BOT_NAME']?.trim() || 'PokéVerse';
+  const botName = process.env['BOT_NAME']?.trim() || 'PokeNyan';
   const rawOwnerIds = process.env['BOT_OWNER_IDS']?.trim() ?? '';
   const ownerIds = rawOwnerIds
     .split(',')
