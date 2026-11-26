@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model UserProfile {
+  userId             String       @id
+  displayName        String       @default("")
+  avatarUrl          String       @default("")
+  buffsJson          Json
+  fishingSetupJson   Json
+  economyJson        Json
+  remindersEnabled   Boolean      @default(true)
+  catchbotReturnAtMs BigInt?
+  catchbotChannelId  String?
+  questsJson         Json         @default("[]")
+  updatedAt          DateTime     @updatedAt
+  logs               CatchLog[]
+  hallOfFameEntries  HallOfFame[]
+}
+
+model CatchLog {
+  id          String      @id
+  userId      String
+  timestamp   BigInt
+  source      String
+  rarityId    String
+  ballId      String
+  caught      Boolean
+  pokemonName String      @default("")
+  ballCost    Int
+  coinsEarned Int
+  netProfit   Int
+  user        UserProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, timestamp(sort: Desc)])
+}
+
+model ChannelSetting {
+  channelId    String  @id
+  enabled      Boolean @default(false)
+  autoCleanSec Int     @default(12)
+  onlyRarePlus Boolean @default(false)
+}
+
+model GlobalSchedule {
+  key       String  @id
+  startAtMs BigInt?
+  channelId String?
+  warned5m  Boolean @default(false)
+}
+
+model HallOfFame {
+  id          String      @id
+  userId      String
+  displayName String      @default("")
+  pokemonName String
+  rarityId    String
+  ballId      String
+  timestamp   BigInt
+  user        UserProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([timestamp(sort: Desc)])
+}

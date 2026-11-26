@@ -1,0 +1,39 @@
+{
+  "name": "pokemeow-companion",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "postinstall": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate-json": "tsx src/bot/scripts/migrate-json-to-db.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/domain/__tests__/optimizer.test.ts src/bot/__tests__/parser.test.ts",
+    "bot:register": "tsx src/bot/register-commands.ts",
+    "bot:dev": "tsx src/bot/index.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "discord.js": "^14.28.1",
+    "dotenv": "^18.0.10",
+    "lucide-react": "^0.511.0",
+    "next": "^15.3.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.7",
+    "@types/node": "^22.15.18",
+    "@types/react": "^19.1.4",
+    "@types/react-dom": "^19.1.5",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^15.3.2",
+    "prisma": "^6.19.3",
+    "tailwindcss": "^4.1.7",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}
