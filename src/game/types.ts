@@ -38,6 +38,7 @@ export interface CreatureSpecies {
   readonly shinyArtworkUrl: string;
   readonly animatedSpriteUrl: string;
   readonly shinyAnimatedSpriteUrl: string;
+  readonly isStaticSprite: boolean;
 }
 
 export interface RarityConfig {

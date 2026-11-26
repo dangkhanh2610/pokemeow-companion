@@ -585,7 +585,9 @@ export function CommunityPortalClient({
                       width={88}
                       height={88}
                       unoptimized
-                      className="max-h-22 w-auto object-contain drop-shadow-[0_8px_16px_rgba(0,0,0,0.6)]"
+                      className={`max-h-22 w-auto object-contain drop-shadow-[0_8px_16px_rgba(0,0,0,0.6)] ${
+                        species.isStaticSprite ? 'animate-sprite-idle' : ''
+                      }`}
                     />
                   </div>
 

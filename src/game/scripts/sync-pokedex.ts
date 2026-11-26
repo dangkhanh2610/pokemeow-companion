@@ -33,6 +33,7 @@ export interface CompactPokedexEntry {
   readonly baseCatchRate: number;
   readonly baseReward: number;
   readonly spriteMode: SpriteMode;
+  readonly isStaticSprite: boolean;
 }
 
 const SHOWDOWN_DEX_URL = 'https://play.pokemonshowdown.com/data/pokedex.json';
@@ -202,12 +203,39 @@ async function headOk(url: string): Promise<boolean> {
   }
 }
 
-async function resolveAltSpriteMode(spriteSlug: string): Promise<SpriteMode | null> {
-  if (await headOk(`https://play.pokemonshowdown.com/sprites/ani/${spriteSlug}.gif`)) {
-    return 'ani';
+function countGifFrames(buf: Buffer): number {
+  let frames = 0;
+  for (let i = 0; i < buf.length - 3; i += 1) {
+    if (buf[i] === 0x21 && buf[i + 1] === 0xf9 && buf[i + 2] === 0x04) {
+      frames += 1;
+    }
   }
+  return frames;
+}
+
+async function resolveAltSpriteInfo(
+  spriteSlug: string,
+): Promise<{ readonly mode: SpriteMode; readonly isStaticSprite: boolean } | null> {
+  const aniUrl = `https://play.pokemonshowdown.com/sprites/ani/${spriteSlug}.gif`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(aniUrl, { signal: controller.signal });
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      return {
+        mode: 'ani',
+        isStaticSprite: countGifFrames(buf) <= 1,
+      };
+    }
+  } catch {
+    // fallback below
+  } finally {
+    clearTimeout(timer);
+  }
+
   if (await headOk(`https://play.pokemonshowdown.com/sprites/dex/${spriteSlug}.png`)) {
-    return 'dex';
+    return { mode: 'dex', isStaticSprite: true };
   }
   return null;
 }
@@ -286,13 +314,16 @@ async function runSync(): Promise<void> {
 
   // Check alternate forms sprites
   console.log(`Đang kiểm tra sprite cho ${altCandidates.length} dạng biến thể...`);
-  const altSpriteModes = new Map<string, SpriteMode | null>();
+  const altSpriteInfo = new Map<
+    string,
+    { readonly mode: SpriteMode; readonly isStaticSprite: boolean } | null
+  >();
   for (let i = 0; i < altCandidates.length; i += BATCH_SIZE) {
     const batch = altCandidates.slice(i, i + BATCH_SIZE);
     await Promise.all(
       batch.map(async (item) => {
-        const mode = await resolveAltSpriteMode(item.spriteSlug);
-        altSpriteModes.set(item.key, mode);
+        const info = await resolveAltSpriteInfo(item.spriteSlug);
+        altSpriteInfo.set(item.key, info);
       }),
     );
   }
@@ -349,6 +380,7 @@ async function runSync(): Promise<void> {
       baseCatchRate,
       baseReward,
       spriteMode,
+      isStaticSprite: spriteMode !== 'ani',
     });
   }
 
@@ -365,8 +397,8 @@ async function runSync(): Promise<void> {
   let skippedNoSprite = 0;
 
   for (const alt of sortedAlt) {
-    const spriteMode = altSpriteModes.get(alt.key) ?? null;
-    if (!spriteMode) {
+    const spriteInfo = altSpriteInfo.get(alt.key) ?? null;
+    if (!spriteInfo) {
       skippedNoSprite += 1;
       continue;
     }
@@ -401,7 +433,8 @@ async function runSync(): Promise<void> {
       baseStats: { hp, atk, def, spAtk, spDef, spd, bst },
       baseCatchRate,
       baseReward,
-      spriteMode,
+      spriteMode: spriteInfo.mode,
+      isStaticSprite: spriteInfo.isStaticSprite,
     });
     nextAltId += 1;
   }

@@ -5,7 +5,7 @@ import {
 } from '../catalog/creature-catalog';
 import type { CreatureIVs, CreatureSpecies, EncounterRoll, RarityTier } from '../types';
 
-export const SHINY_CHANCE = 1 / 1024;
+export const SHINY_CHANCE = 1 / 2048;
 const MAX_SINGLE_IV = 31;
 const MAX_TOTAL_IV = 186;
 
