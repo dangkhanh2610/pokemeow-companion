@@ -49,13 +49,19 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.equal(megaCharizardX?.rarity, 'mega');
     assert.equal(megaCharizardX?.dexNumber, 6);
     assert.equal(primalGroudon?.rarity, 'mega');
+    const raichuMegaX = all.find((s) => s.name === 'Raichu-Mega-X');
+    const greninjaMega = all.find((s) => s.name === 'Greninja-Mega');
+
     assert.equal(megaRayquaza?.rarity, 'mega');
+    assert.ok(raichuMegaX?.shinyAnimatedSpriteUrl);
+    assert.ok(!raichuMegaX.shinyAnimatedSpriteUrl.includes('ani-shiny'));
+    assert.ok(greninjaMega?.shinyAnimatedSpriteUrl.includes('dex-shiny'));
     assert.ok(catalog.search('dragon').length >= 1);
     assert.equal(catalog.findMegaByQuery('rayquaza')?.name, 'Rayquaza-Mega');
     assert.equal(catalog.findMegaByQuery('charizard x')?.name, 'Charizard-Mega-X');
-    assert.equal(RARITY_CONFIGS.legendary.weight, 0.1);
+    assert.equal(RARITY_CONFIGS.legendary.weight, 0.05);
     assert.equal(RARITY_CONFIGS.mega.weight, 0);
-    assert.equal(SHINY_CHANCE, 1 / 4096);
+    assert.equal(SHINY_CHANCE, 1 / 8192);
     assert.equal(ENCOUNTER_TTL_MS, 7_000);
 
     // Đảm bảo SpawnEngine không bao giờ spawn ra Mega ngoài tự nhiên

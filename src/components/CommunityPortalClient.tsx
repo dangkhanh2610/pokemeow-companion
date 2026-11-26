@@ -68,6 +68,33 @@ const FORM_BADGE_LABELS: Readonly<Record<Exclude<CreatureFormType, 'base'>, stri
   special: 'SPECIAL',
 };
 
+interface SpriteImgProps {
+  readonly sources: readonly string[];
+  readonly alt: string;
+  readonly className: string;
+}
+
+function SpriteImg({ sources, alt, className }: SpriteImgProps) {
+  const [attemptIndex, setAttemptIndex] = useState(0);
+  const currentSrc = sources[attemptIndex] ?? sources[sources.length - 1] ?? '';
+
+  return (
+    <Image
+      src={currentSrc}
+      alt={alt}
+      width={88}
+      height={88}
+      unoptimized
+      className={className}
+      onError={() => {
+        if (attemptIndex < sources.length - 1) {
+          setAttemptIndex((idx) => idx + 1);
+        }
+      }}
+    />
+  );
+}
+
 export function CommunityPortalClient({
   initialOverview,
   initialLeaderboard,
@@ -579,14 +606,22 @@ export function CommunityPortalClient({
                   </div>
 
                   <div className="my-3 flex h-24 items-center justify-center">
-                    <Image
-                      src={spriteSrc}
+                    <SpriteImg
+                      key={`${species.id}-${showShiny ? 'shiny' : 'normal'}`}
+                      sources={
+                        showShiny
+                          ? [
+                              species.shinyAnimatedSpriteUrl,
+                              species.animatedSpriteUrl,
+                              species.artworkUrl,
+                            ]
+                          : [species.animatedSpriteUrl, species.artworkUrl]
+                      }
                       alt={species.name}
-                      width={88}
-                      height={88}
-                      unoptimized
                       className={`max-h-22 w-auto object-contain drop-shadow-[0_8px_16px_rgba(0,0,0,0.6)] ${
-                        species.isStaticSprite ? 'animate-sprite-idle' : ''
+                        species.isStaticSprite || (showShiny && spriteSrc.endsWith('.png'))
+                          ? 'animate-sprite-idle'
+                          : ''
                       }`}
                     />
                   </div>

@@ -20,6 +20,7 @@ interface ShowdownDexEntry {
 }
 
 export type SpriteMode = 'ani' | 'dex' | 'artwork';
+export type ShinySpriteMode = 'ani' | 'dex' | 'artwork' | 'normal';
 
 export interface CompactPokedexEntry {
   readonly id: number;
@@ -33,6 +34,7 @@ export interface CompactPokedexEntry {
   readonly baseCatchRate: number;
   readonly baseReward: number;
   readonly spriteMode: SpriteMode;
+  readonly shinySpriteMode: ShinySpriteMode;
   readonly isStaticSprite: boolean;
 }
 
@@ -240,6 +242,38 @@ async function resolveAltSpriteInfo(
   return null;
 }
 
+async function resolveShinySpriteMode(
+  slug: string,
+  dexNumber: number,
+  normalMode: SpriteMode,
+): Promise<ShinySpriteMode> {
+  if (normalMode === 'ani') {
+    if (await headOk(`https://play.pokemonshowdown.com/sprites/ani-shiny/${slug}.gif`)) {
+      return 'ani';
+    }
+    if (await headOk(`https://play.pokemonshowdown.com/sprites/dex-shiny/${slug}.png`)) {
+      return 'dex';
+    }
+    return 'normal';
+  }
+
+  if (normalMode === 'dex') {
+    if (await headOk(`https://play.pokemonshowdown.com/sprites/dex-shiny/${slug}.png`)) {
+      return 'dex';
+    }
+    return 'normal';
+  }
+
+  if (
+    await headOk(
+      `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/shiny/${dexNumber}.png`,
+    )
+  ) {
+    return 'artwork';
+  }
+  return 'normal';
+}
+
 async function runSync(): Promise<void> {
   console.log(`Đang tải toàn bộ National Pokédex + Forms từ ${SHOWDOWN_DEX_URL}...`);
   const response = await fetch(SHOWDOWN_DEX_URL);
@@ -292,12 +326,14 @@ async function runSync(): Promise<void> {
     `Tìm thấy ${sortedNums.length} loài gốc và ${altCandidates.length} dạng biến thể (Mega/Gmax/Regional/Special).`,
   );
 
-  // Check Gen 9 base GIFs
+  // Check Gen 9 base GIFs + shiny sprites
   const gen9SpriteMode = new Map<number, SpriteMode>();
+  const gen9ShinyMode = new Map<number, ShinySpriteMode>();
   const gen9Nums = sortedNums.filter((n) => n >= GEN9_START_NUM);
-  const BATCH_SIZE = 20;
+  const base899PlusNums = sortedNums.filter((n) => n >= 899 && n < GEN9_START_NUM);
+  const BATCH_SIZE = 25;
 
-  console.log(`Đang kiểm tra sprite .gif cho ${gen9Nums.length} loài gốc Gen 9...`);
+  console.log(`Đang kiểm tra sprite .gif và Shiny cho ${gen9Nums.length} loài gốc Gen 9...`);
   for (let i = 0; i < gen9Nums.length; i += BATCH_SIZE) {
     const batch = gen9Nums.slice(i, i + BATCH_SIZE);
     await Promise.all(
@@ -307,23 +343,55 @@ async function runSync(): Promise<void> {
           return;
         }
         const ok = await headOk(`https://play.pokemonshowdown.com/sprites/ani/${record.slug}.gif`);
-        gen9SpriteMode.set(num, ok ? 'ani' : 'artwork');
+        const mode: SpriteMode = ok ? 'ani' : 'artwork';
+        gen9SpriteMode.set(num, mode);
+        gen9ShinyMode.set(num, await resolveShinySpriteMode(record.slug, num, mode));
       }),
     );
   }
 
-  // Check alternate forms sprites
-  console.log(`Đang kiểm tra sprite cho ${altCandidates.length} dạng biến thể...`);
+  for (let i = 0; i < base899PlusNums.length; i += BATCH_SIZE) {
+    const batch = base899PlusNums.slice(i, i + BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (num) => {
+        const record = baseByNum.get(num);
+        if (!record) {
+          return;
+        }
+        gen9ShinyMode.set(num, await resolveShinySpriteMode(record.slug, num, 'ani'));
+      }),
+    );
+  }
+
+  // Check alternate forms sprites + shiny sprites
+  console.log(`Đang kiểm tra sprite thường & Shiny cho ${altCandidates.length} dạng biến thể...`);
   const altSpriteInfo = new Map<
     string,
-    { readonly mode: SpriteMode; readonly isStaticSprite: boolean } | null
+    {
+      readonly mode: SpriteMode;
+      readonly shinyMode: ShinySpriteMode;
+      readonly isStaticSprite: boolean;
+    } | null
   >();
   for (let i = 0; i < altCandidates.length; i += BATCH_SIZE) {
     const batch = altCandidates.slice(i, i + BATCH_SIZE);
     await Promise.all(
       batch.map(async (item) => {
         const info = await resolveAltSpriteInfo(item.spriteSlug);
-        altSpriteInfo.set(item.key, info);
+        if (!info) {
+          altSpriteInfo.set(item.key, null);
+          return;
+        }
+        const shinyMode = await resolveShinySpriteMode(
+          item.spriteSlug,
+          item.entry.num ?? 1,
+          info.mode,
+        );
+        altSpriteInfo.set(item.key, {
+          mode: info.mode,
+          shinyMode,
+          isStaticSprite: info.isStaticSprite,
+        });
       }),
     );
   }
@@ -367,6 +435,8 @@ async function runSync(): Promise<void> {
     const { baseCatchRate, baseReward } = computeBalance(rarity, bst);
     const spriteMode: SpriteMode =
       num < GEN9_START_NUM ? 'ani' : (gen9SpriteMode.get(num) ?? 'artwork');
+    const shinySpriteMode: ShinySpriteMode =
+      num < 899 ? 'ani' : (gen9ShinyMode.get(num) ?? spriteMode);
 
     result.push({
       id: num,
@@ -380,11 +450,11 @@ async function runSync(): Promise<void> {
       baseCatchRate,
       baseReward,
       spriteMode,
+      shinySpriteMode,
       isStaticSprite: spriteMode !== 'ani',
     });
   }
 
-  // Sort alternate forms deterministically by dexNumber then name
   const sortedAlt = [...altCandidates].sort((a, b) => {
     const numDiff = (a.entry.num ?? 0) - (b.entry.num ?? 0);
     if (numDiff !== 0) {
@@ -434,6 +504,7 @@ async function runSync(): Promise<void> {
       baseCatchRate,
       baseReward,
       spriteMode: spriteInfo.mode,
+      shinySpriteMode: spriteInfo.shinyMode,
       isStaticSprite: spriteInfo.isStaticSprite,
     });
     nextAltId += 1;
@@ -442,9 +513,14 @@ async function runSync(): Promise<void> {
   await mkdir(dirname(OUTPUT_PATH), { recursive: true });
   await writeFile(OUTPUT_PATH, JSON.stringify(result), 'utf8');
 
+  const shinyDexFallbackCount = result.filter((r) => r.shinySpriteMode === 'dex').length;
+  const shinyNormalFallbackCount = result.filter((r) => r.shinySpriteMode === 'normal').length;
   console.log(`Đã ghi tổng cộng ${result.length} Pokémon & Biến thể vào ${OUTPUT_PATH}.`);
   console.log('Phân bố độ hiếm:', rarityCounts);
   console.log('Phân bố theo dạng:', formCounts);
+  console.log(
+    `Shiny fallback: ${shinyDexFallbackCount} dùng dex-shiny PNG, ${shinyNormalFallbackCount} dùng ảnh gốc do Showdown chưa có Shiny.`,
+  );
   console.log(`Đã bỏ qua ${skippedNoSprite} biến thể chưa có sprite trên Showdown.`);
 }
 
