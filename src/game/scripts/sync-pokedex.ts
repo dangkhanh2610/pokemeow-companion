@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import type { CreatureBaseStats, RarityTier } from '../types';
+import type { CreatureBaseStats, CreatureFormType, RarityTier } from '../types';
 
 interface ShowdownDexEntry {
   readonly num?: number;
@@ -19,24 +19,95 @@ interface ShowdownDexEntry {
   readonly tags?: readonly string[];
 }
 
+export type SpriteMode = 'ani' | 'dex' | 'artwork';
+
 export interface CompactPokedexEntry {
   readonly id: number;
+  readonly dexNumber: number;
   readonly slug: string;
   readonly name: string;
   readonly rarity: RarityTier;
+  readonly formType: CreatureFormType;
   readonly types: readonly string[];
   readonly baseStats: CreatureBaseStats;
   readonly baseCatchRate: number;
   readonly baseReward: number;
-  readonly hasAnimatedSprite: boolean;
+  readonly spriteMode: SpriteMode;
 }
 
 const SHOWDOWN_DEX_URL = 'https://play.pokemonshowdown.com/data/pokedex.json';
 const OUTPUT_PATH = resolve(process.cwd(), 'src/game/data/pokedex.json');
 const MAX_DEX_NUM = 1025;
 const GEN9_START_NUM = 906;
+const ALT_FORM_ID_START = 10001;
 
-function classifyRarity(tags: readonly string[], bst: number): RarityTier {
+const MEGA_FORMES = new Set(['Mega', 'Mega-X', 'Mega-Y', 'Mega-Z', 'Primal']);
+const REGIONAL_FORMES = new Set([
+  'Alola',
+  'Galar',
+  'Hisui',
+  'Paldea',
+  'Paldea-Combat',
+  'Paldea-Blaze',
+  'Paldea-Aqua',
+]);
+const SPECIAL_FORMES = new Set([
+  'Origin',
+  'Therian',
+  'Crowned',
+  'Ultra',
+  'Black',
+  'White',
+  'Ice',
+  'Shadow',
+  'Unbound',
+  'Complete',
+  '10%',
+  'Dusk-Mane',
+  'Dawn-Wings',
+  'Attack',
+  'Defense',
+  'Speed',
+  'Sky',
+  'Resolute',
+  'Pirouette',
+  'Ash',
+  'Rapid-Strike',
+  'Bloodmoon',
+  'Terastal',
+  'Stellar',
+  'Wellspring',
+  'Hearthflame',
+  'Cornerstone',
+]);
+
+function classifyFormType(forme: string | undefined): CreatureFormType | null {
+  if (!forme) {
+    return 'base';
+  }
+  if (MEGA_FORMES.has(forme)) {
+    return 'mega';
+  }
+  if (forme === 'Gmax') {
+    return 'gmax';
+  }
+  if (REGIONAL_FORMES.has(forme)) {
+    return 'regional';
+  }
+  if (SPECIAL_FORMES.has(forme)) {
+    return 'special';
+  }
+  return null;
+}
+
+function classifyRarity(
+  tags: readonly string[],
+  bst: number,
+  formType: CreatureFormType,
+): RarityTier {
+  if (formType === 'mega') {
+    return 'mega';
+  }
   const tagSet = new Set(tags);
   if (
     tagSet.has('Restricted Legendary') ||
@@ -45,7 +116,7 @@ function classifyRarity(tags: readonly string[], bst: number): RarityTier {
   ) {
     return 'legendary';
   }
-  if (tagSet.has('Ultra Beast') || tagSet.has('Paradox') || bst >= 550) {
+  if (formType === 'gmax' || tagSet.has('Ultra Beast') || tagSet.has('Paradox') || bst >= 550) {
     return 'super_rare';
   }
   if (bst >= 485) {
@@ -61,7 +132,7 @@ function computeBalance(
   rarity: RarityTier,
   bst: number,
 ): { readonly baseCatchRate: number; readonly baseReward: number } {
-  const clampedBst = Math.max(180, Math.min(720, bst));
+  const clampedBst = Math.max(180, Math.min(780, bst));
 
   switch (rarity) {
     case 'common': {
@@ -93,17 +164,32 @@ function computeBalance(
       };
     }
     case 'legendary': {
-      const ratio = Math.max(0, Math.min(1, (clampedBst - 570) / 150));
+      const ratio = Math.max(0, Math.min(1, (clampedBst - 570) / 180));
       return {
         baseCatchRate: Number((0.12 - ratio * 0.04).toFixed(2)),
         baseReward: Math.round(6200 + ratio * 3300),
       };
     }
+    case 'mega': {
+      const ratio = Math.max(0, Math.min(1, (clampedBst - 580) / 200));
+      return {
+        baseCatchRate: Number((0.1 - ratio * 0.03).toFixed(2)),
+        baseReward: Math.round(8500 + ratio * 4000),
+      };
+    }
   }
 }
 
-async function checkGifExists(slug: string): Promise<boolean> {
-  const url = `https://play.pokemonshowdown.com/sprites/ani/${slug}.gif`;
+function toShowdownSpriteSlug(key: string, entry: ShowdownDexEntry): string {
+  if (!entry.forme || !entry.baseSpecies) {
+    return key;
+  }
+  const baseSlug = entry.baseSpecies.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const formeSlug = entry.forme.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return `${baseSlug}-${formeSlug}`;
+}
+
+async function headOk(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
@@ -116,58 +202,97 @@ async function checkGifExists(slug: string): Promise<boolean> {
   }
 }
 
+async function resolveAltSpriteMode(spriteSlug: string): Promise<SpriteMode | null> {
+  if (await headOk(`https://play.pokemonshowdown.com/sprites/ani/${spriteSlug}.gif`)) {
+    return 'ani';
+  }
+  if (await headOk(`https://play.pokemonshowdown.com/sprites/dex/${spriteSlug}.png`)) {
+    return 'dex';
+  }
+  return null;
+}
+
 async function runSync(): Promise<void> {
-  console.log(`Đang tải toàn bộ National Pokédex từ ${SHOWDOWN_DEX_URL}...`);
+  console.log(`Đang tải toàn bộ National Pokédex + Forms từ ${SHOWDOWN_DEX_URL}...`);
   const response = await fetch(SHOWDOWN_DEX_URL);
   if (!response.ok) {
     throw new Error(`Không thể tải pokedex.json: HTTP ${response.status}`);
   }
 
   const rawDex = (await response.json()) as Record<string, ShowdownDexEntry>;
-  const byNum = new Map<number, { readonly slug: string; readonly entry: ShowdownDexEntry }>();
+  const baseByNum = new Map<number, { readonly slug: string; readonly entry: ShowdownDexEntry }>();
+  const altCandidates: {
+    readonly key: string;
+    readonly spriteSlug: string;
+    readonly formType: CreatureFormType;
+    readonly entry: ShowdownDexEntry;
+  }[] = [];
 
-  for (const [slug, entry] of Object.entries(rawDex)) {
+  for (const [key, entry] of Object.entries(rawDex)) {
     const num = entry.num ?? 0;
     if (num < 1 || num > MAX_DEX_NUM) {
       continue;
     }
-    if (entry.forme || entry.baseSpecies) {
+
+    if (!entry.forme && !entry.baseSpecies) {
+      if (!baseByNum.has(num)) {
+        baseByNum.set(num, { slug: key, entry });
+      }
       continue;
     }
-    if (!byNum.has(num)) {
-      byNum.set(num, { slug, entry });
+
+    const formType = classifyFormType(entry.forme);
+    if (formType && formType !== 'base') {
+      altCandidates.push({
+        key,
+        spriteSlug: toShowdownSpriteSlug(key, entry),
+        formType,
+        entry,
+      });
     }
   }
 
-  // Fallback pass in case any canonical dex number uses baseSpecies without matching above
-  for (const [slug, entry] of Object.entries(rawDex)) {
+  for (const [key, entry] of Object.entries(rawDex)) {
     const num = entry.num ?? 0;
-    if (num < 1 || num > MAX_DEX_NUM || entry.forme) {
-      continue;
-    }
-    if (!byNum.has(num)) {
-      byNum.set(num, { slug, entry });
+    if (num >= 1 && num <= MAX_DEX_NUM && !entry.forme && !baseByNum.has(num)) {
+      baseByNum.set(num, { slug: key, entry });
     }
   }
 
-  const sortedNums = [...byNum.keys()].sort((a, b) => a - b);
-  console.log(`Đã lọc được ${sortedNums.length} loài Pokémon (từ #1 đến #${MAX_DEX_NUM}).`);
+  const sortedNums = [...baseByNum.keys()].sort((a, b) => a - b);
+  console.log(
+    `Tìm thấy ${sortedNums.length} loài gốc và ${altCandidates.length} dạng biến thể (Mega/Gmax/Regional/Special).`,
+  );
 
-  const gifAvailability = new Map<number, boolean>();
+  // Check Gen 9 base GIFs
+  const gen9SpriteMode = new Map<number, SpriteMode>();
   const gen9Nums = sortedNums.filter((n) => n >= GEN9_START_NUM);
-  console.log(`Đang kiểm tra sprite .gif động cho ${gen9Nums.length} Pokémon Gen 9...`);
+  const BATCH_SIZE = 20;
 
-  const BATCH_SIZE = 15;
+  console.log(`Đang kiểm tra sprite .gif cho ${gen9Nums.length} loài gốc Gen 9...`);
   for (let i = 0; i < gen9Nums.length; i += BATCH_SIZE) {
     const batch = gen9Nums.slice(i, i + BATCH_SIZE);
     await Promise.all(
       batch.map(async (num) => {
-        const record = byNum.get(num);
+        const record = baseByNum.get(num);
         if (!record) {
           return;
         }
-        const ok = await checkGifExists(record.slug);
-        gifAvailability.set(num, ok);
+        const ok = await headOk(`https://play.pokemonshowdown.com/sprites/ani/${record.slug}.gif`);
+        gen9SpriteMode.set(num, ok ? 'ani' : 'artwork');
+      }),
+    );
+  }
+
+  // Check alternate forms sprites
+  console.log(`Đang kiểm tra sprite cho ${altCandidates.length} dạng biến thể...`);
+  const altSpriteModes = new Map<string, SpriteMode | null>();
+  for (let i = 0; i < altCandidates.length; i += BATCH_SIZE) {
+    const batch = altCandidates.slice(i, i + BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (item) => {
+        const mode = await resolveAltSpriteMode(item.spriteSlug);
+        altSpriteModes.set(item.key, mode);
       }),
     );
   }
@@ -179,10 +304,18 @@ async function runSync(): Promise<void> {
     rare: 0,
     super_rare: 0,
     legendary: 0,
+    mega: 0,
+  };
+  const formCounts: Record<CreatureFormType, number> = {
+    base: 0,
+    mega: 0,
+    gmax: 0,
+    regional: 0,
+    special: 0,
   };
 
   for (const num of sortedNums) {
-    const record = byNum.get(num);
+    const record = baseByNum.get(num);
     if (!record) {
       continue;
     }
@@ -194,34 +327,92 @@ async function runSync(): Promise<void> {
     const spDef = entry.baseStats?.spd ?? 50;
     const spd = entry.baseStats?.spe ?? 50;
     const bst = hp + atk + def + spAtk + spDef + spd;
-
     const tags = entry.tags ?? [];
-    const rarity = classifyRarity(tags, bst);
+
+    const rarity = classifyRarity(tags, bst, 'base');
     rarityCounts[rarity] += 1;
+    formCounts.base += 1;
 
     const { baseCatchRate, baseReward } = computeBalance(rarity, bst);
-    const hasAnimatedSprite = num < GEN9_START_NUM ? true : (gifAvailability.get(num) ?? false);
+    const spriteMode: SpriteMode =
+      num < GEN9_START_NUM ? 'ani' : (gen9SpriteMode.get(num) ?? 'artwork');
 
     result.push({
       id: num,
+      dexNumber: num,
       slug,
       name: entry.name ?? slug,
       rarity,
+      formType: 'base',
       types: entry.types && entry.types.length > 0 ? [...entry.types] : ['Normal'],
       baseStats: { hp, atk, def, spAtk, spDef, spd, bst },
       baseCatchRate,
       baseReward,
-      hasAnimatedSprite,
+      spriteMode,
     });
+  }
+
+  // Sort alternate forms deterministically by dexNumber then name
+  const sortedAlt = [...altCandidates].sort((a, b) => {
+    const numDiff = (a.entry.num ?? 0) - (b.entry.num ?? 0);
+    if (numDiff !== 0) {
+      return numDiff;
+    }
+    return (a.entry.name ?? a.key).localeCompare(b.entry.name ?? b.key);
+  });
+
+  let nextAltId = ALT_FORM_ID_START;
+  let skippedNoSprite = 0;
+
+  for (const alt of sortedAlt) {
+    const spriteMode = altSpriteModes.get(alt.key) ?? null;
+    if (!spriteMode) {
+      skippedNoSprite += 1;
+      continue;
+    }
+
+    const dexNumber = alt.entry.num ?? 1;
+    const baseRecord = baseByNum.get(dexNumber);
+    const baseTags = baseRecord?.entry.tags ?? [];
+    const combinedTags = [...baseTags, ...(alt.entry.tags ?? [])];
+
+    const hp = alt.entry.baseStats?.hp ?? 50;
+    const atk = alt.entry.baseStats?.atk ?? 50;
+    const def = alt.entry.baseStats?.def ?? 50;
+    const spAtk = alt.entry.baseStats?.spa ?? 50;
+    const spDef = alt.entry.baseStats?.spd ?? 50;
+    const spd = alt.entry.baseStats?.spe ?? 50;
+    const bst = hp + atk + def + spAtk + spDef + spd;
+
+    const rarity = classifyRarity(combinedTags, bst, alt.formType);
+    rarityCounts[rarity] += 1;
+    formCounts[alt.formType] += 1;
+
+    const { baseCatchRate, baseReward } = computeBalance(rarity, bst);
+
+    result.push({
+      id: nextAltId,
+      dexNumber,
+      slug: alt.spriteSlug,
+      name: alt.entry.name ?? alt.spriteSlug,
+      rarity,
+      formType: alt.formType,
+      types: alt.entry.types && alt.entry.types.length > 0 ? [...alt.entry.types] : ['Normal'],
+      baseStats: { hp, atk, def, spAtk, spDef, spd, bst },
+      baseCatchRate,
+      baseReward,
+      spriteMode,
+    });
+    nextAltId += 1;
   }
 
   await mkdir(dirname(OUTPUT_PATH), { recursive: true });
   await writeFile(OUTPUT_PATH, JSON.stringify(result), 'utf8');
 
-  const staticFallbackCount = result.filter((r) => !r.hasAnimatedSprite).length;
-  console.log(`Đã ghi ${result.length} loài vào ${OUTPUT_PATH}.`);
+  console.log(`Đã ghi tổng cộng ${result.length} Pokémon & Biến thể vào ${OUTPUT_PATH}.`);
   console.log('Phân bố độ hiếm:', rarityCounts);
-  console.log(`Số loài Gen 9 dùng artwork fallback thay cho .gif: ${staticFallbackCount}`);
+  console.log('Phân bố theo dạng:', formCounts);
+  console.log(`Đã bỏ qua ${skippedNoSprite} biến thể chưa có sprite trên Showdown.`);
 }
 
 runSync().catch((error: unknown) => {

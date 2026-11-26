@@ -1,5 +1,11 @@
 import rawPokedexData from '../data/pokedex.json';
-import type { CreatureBaseStats, CreatureSpecies, RarityConfig, RarityTier } from '../types';
+import type {
+  CreatureBaseStats,
+  CreatureFormType,
+  CreatureSpecies,
+  RarityConfig,
+  RarityTier,
+} from '../types';
 
 export interface ICreatureCatalog {
   getAll(): readonly CreatureSpecies[];
@@ -8,23 +14,27 @@ export interface ICreatureCatalog {
   search(query: string, rarity?: RarityTier): readonly CreatureSpecies[];
 }
 
+type SpriteMode = 'ani' | 'dex' | 'artwork';
+
 interface CompactPokedexEntry {
   readonly id: number;
+  readonly dexNumber: number;
   readonly slug: string;
   readonly name: string;
   readonly rarity: RarityTier;
+  readonly formType: CreatureFormType;
   readonly types: readonly string[];
   readonly baseStats: CreatureBaseStats;
   readonly baseCatchRate: number;
   readonly baseReward: number;
-  readonly hasAnimatedSprite: boolean;
+  readonly spriteMode: SpriteMode;
 }
 
 export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   common: {
     tier: 'common',
     label: 'Common',
-    weight: 52,
+    weight: 51,
     colorHex: 0x94a3b8,
     badgeCss: 'bg-slate-500/20 text-slate-300 border-slate-500/40',
     xpReward: 25,
@@ -32,7 +42,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   uncommon: {
     tier: 'uncommon',
     label: 'Uncommon',
-    weight: 26,
+    weight: 25.5,
     colorHex: 0x10b981,
     badgeCss: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
     xpReward: 45,
@@ -61,14 +71,45 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
     badgeCss: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
     xpReward: 400,
   },
+  mega: {
+    tier: 'mega',
+    label: 'Mega',
+    weight: 1.5,
+    colorHex: 0xf43f5e,
+    badgeCss: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+    xpReward: 450,
+  },
 };
 
-function buildArtworkUrl(id: number): string {
-  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${id}.png`;
+function buildArtworkUrl(dexNumber: number): string {
+  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${dexNumber}.png`;
 }
 
-function buildShinyArtworkUrl(id: number): string {
-  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/shiny/${id}.png`;
+function buildShinyArtworkUrl(dexNumber: number): string {
+  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/shiny/${dexNumber}.png`;
+}
+
+function resolveAnimatedSprites(
+  entry: CompactPokedexEntry,
+  artworkUrl: string,
+  shinyArtworkUrl: string,
+): { readonly animatedSpriteUrl: string; readonly shinyAnimatedSpriteUrl: string } {
+  if (entry.spriteMode === 'ani') {
+    return {
+      animatedSpriteUrl: `https://play.pokemonshowdown.com/sprites/ani/${entry.slug}.gif`,
+      shinyAnimatedSpriteUrl: `https://play.pokemonshowdown.com/sprites/ani-shiny/${entry.slug}.gif`,
+    };
+  }
+  if (entry.spriteMode === 'dex') {
+    return {
+      animatedSpriteUrl: `https://play.pokemonshowdown.com/sprites/dex/${entry.slug}.png`,
+      shinyAnimatedSpriteUrl: `https://play.pokemonshowdown.com/sprites/dex-shiny/${entry.slug}.png`,
+    };
+  }
+  return {
+    animatedSpriteUrl: artworkUrl,
+    shinyAnimatedSpriteUrl: shinyArtworkUrl,
+  };
 }
 
 export class PokemonCreatureCatalog implements ICreatureCatalog {
@@ -80,20 +121,21 @@ export class PokemonCreatureCatalog implements ICreatureCatalog {
     const entries = rawPokedexData as readonly CompactPokedexEntry[];
 
     this.speciesList = entries.map((entry) => {
-      const artworkUrl = buildArtworkUrl(entry.id);
-      const shinyArtworkUrl = buildShinyArtworkUrl(entry.id);
-      const animatedSpriteUrl = entry.hasAnimatedSprite
-        ? `https://play.pokemonshowdown.com/sprites/ani/${entry.slug}.gif`
-        : artworkUrl;
-      const shinyAnimatedSpriteUrl = entry.hasAnimatedSprite
-        ? `https://play.pokemonshowdown.com/sprites/ani-shiny/${entry.slug}.gif`
-        : shinyArtworkUrl;
+      const artworkUrl = buildArtworkUrl(entry.dexNumber);
+      const shinyArtworkUrl = buildShinyArtworkUrl(entry.dexNumber);
+      const { animatedSpriteUrl, shinyAnimatedSpriteUrl } = resolveAnimatedSprites(
+        entry,
+        artworkUrl,
+        shinyArtworkUrl,
+      );
 
       return {
         id: entry.id,
+        dexNumber: entry.dexNumber,
         slug: entry.slug,
         name: entry.name,
         rarity: entry.rarity,
+        formType: entry.formType,
         types: entry.types,
         baseStats: entry.baseStats,
         baseCatchRate: entry.baseCatchRate,
@@ -135,7 +177,7 @@ export class PokemonCreatureCatalog implements ICreatureCatalog {
   }
 
   public search(query: string, rarity?: RarityTier): readonly CreatureSpecies[] {
-    const normalized = query.trim().toLowerCase();
+    const normalized = query.trim().toLowerCase().replace(/^#/, '');
     return this.speciesList.filter((species) => {
       if (rarity && species.rarity !== rarity) {
         return false;
@@ -146,6 +188,7 @@ export class PokemonCreatureCatalog implements ICreatureCatalog {
       return (
         species.name.toLowerCase().includes(normalized) ||
         String(species.id) === normalized ||
+        String(species.dexNumber) === normalized ||
         species.slug.includes(normalized) ||
         species.types.some((t) => t.toLowerCase().includes(normalized))
       );

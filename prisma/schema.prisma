@@ -21,6 +21,7 @@ model Trainer {
   dailyStreak     Int                  @default(0)
   lastDailyAt     DateTime?
   lastWildAt      DateTime?
+  lastRescueAt    DateTime?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   inventory       InventoryItem[]
@@ -51,6 +52,7 @@ model CaughtCreature {
   ivsJson     Json
   level       Int      @default(1)
   ballUsed    String
+  isFavorite  Boolean  @default(false)
   released    Boolean  @default(false)
   caughtAt    DateTime @default(now())
   trainer     Trainer  @relation(fields: [userId], references: [userId], onDelete: Cascade)
@@ -73,6 +75,7 @@ model ActiveEncounter {
   trainer   Trainer  @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   @@index([userId, status])
+  @@index([status, createdAt])
 }
 
 model EconomyTransaction {
@@ -89,10 +92,12 @@ model EconomyTransaction {
 }
 
 model GuildConfig {
-  guildId    String    @id
-  prefix     String    @default(";")
-  enabled    Boolean   @default(true)
-  disabledBy String?
-  disabledAt DateTime?
-  updatedAt  DateTime  @updatedAt
+  guildId         String    @id
+  prefix          String    @default(";")
+  enabled         Boolean   @default(true)
+  disabledBy      String?
+  disabledAt      DateTime?
+  allowedChannels String[]  @default([])
+  blockedChannels String[]  @default([])
+  updatedAt       DateTime  @updatedAt
 }

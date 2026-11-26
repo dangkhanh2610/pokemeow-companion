@@ -1,7 +1,10 @@
 import { Client, Events, GatewayIntentBits } from 'discord.js';
+import { encounterService } from '@/game/services/encounter-service';
 import { loadBotConfig } from './config';
 import { botEmojiRegistry } from './emoji-registry';
 import { BotCommandRouter } from './handlers/command-router';
+
+const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 async function bootstrapBot(): Promise<void> {
   const config = loadBotConfig();
@@ -16,11 +19,35 @@ async function bootstrapBot(): Promise<void> {
     ],
   });
 
+  let cleanupTimer: NodeJS.Timeout | undefined;
+
   client.once(Events.ClientReady, (readyClient) => {
     console.log(
       `[${config.botName}] Đã kết nối Discord dưới tên ${readyClient.user.tag} (${readyClient.guilds.cache.size} servers).`,
     );
-    console.log(`[${config.botName}] Sẵn sàng nhận Slash Commands (/) và Prefix (${config.prefix}).`);
+    console.log(
+      `[${config.botName}] Sẵn sàng nhận Slash Commands (/), Prefix mặc định (${config.prefix}) và Mention (@${readyClient.user.username}).`,
+    );
+
+    const runCleanup = (): void => {
+      void encounterService
+        .cleanupStaleEncounters(24)
+        .then((deleted) => {
+          if (deleted > 0) {
+            console.log(`[${config.botName}] Đã dọn ${deleted} phiên chạm trán cũ (> 24h).`);
+          }
+        })
+        .catch((err: unknown) => {
+          console.warn(
+            `[${config.botName}] Không thể dọn phiên chạm trán cũ:`,
+            err instanceof Error ? err.message : err,
+          );
+        });
+    };
+
+    runCleanup();
+    cleanupTimer = setInterval(runCleanup, CLEANUP_INTERVAL_MS);
+    cleanupTimer.unref();
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -32,10 +59,16 @@ async function bootstrapBot(): Promise<void> {
       }
     } catch (error) {
       console.error('Lỗi xử lý Interaction:', error);
-      if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-        await interaction
-          .reply({ content: '❌ Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.', ephemeral: true })
-          .catch(() => undefined);
+      if (interaction.isRepliable()) {
+        if (interaction.deferred || interaction.replied) {
+          await interaction
+            .followUp({ content: '❌ Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.', ephemeral: true })
+            .catch(() => undefined);
+        } else {
+          await interaction
+            .reply({ content: '❌ Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.', ephemeral: true })
+            .catch(() => undefined);
+        }
       }
     }
   });
@@ -53,6 +86,10 @@ async function bootstrapBot(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     console.log(`[${config.botName}] Nhận tín hiệu ${signal}, đang ngắt kết nối Discord...`);
+    if (cleanupTimer) {
+      clearInterval(cleanupTimer);
+    }
+    router.dispose();
     client.destroy();
     process.exit(0);
   };

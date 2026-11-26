@@ -12,6 +12,9 @@ export interface StoredAppEmoji {
   readonly name: string;
 }
 
+const EMOJI_PREFIX = 'pn_';
+const LEGACY_PREFIX = 'pv_';
+
 export class EmojiRegistry {
   private readonly emojis = new Map<BallId, StoredAppEmoji>();
 
@@ -25,7 +28,7 @@ export class EmojiRegistry {
       existingItems = Array.isArray(response.items) ? response.items : [];
     } catch (error) {
       console.warn(
-        '[EmojiRegistry] Không thể tải danh sách Application Emojis từ Discord, sẽ dùng emoji dự phòng:',
+        '[EmojiRegistry] Không thể tải danh sách Application Emojis từ Discord, sẽ dùng ký hiệu dự phòng:',
         error instanceof Error ? error.message : error,
       );
       return;
@@ -38,8 +41,18 @@ export class EmojiRegistry {
       }
     }
 
+    // Dọn các emoji pixel cũ (pv_*) nếu còn tồn tại để tránh trùng lặp
     for (const ball of BALL_CATALOG) {
-      const targetName = `pv_${ball.id}`;
+      const legacy = byName.get(`${LEGACY_PREFIX}${ball.id}`);
+      if (legacy) {
+        await rest
+          .delete(`/applications/${clientId}/emojis/${legacy.id}` as `/${string}`)
+          .catch(() => undefined);
+      }
+    }
+
+    for (const ball of BALL_CATALOG) {
+      const targetName = `${EMOJI_PREFIX}${ball.id}`;
       const existing = byName.get(targetName);
       if (existing) {
         this.emojis.set(ball.id, existing);
@@ -65,11 +78,11 @@ export class EmojiRegistry {
 
         if (created.id && created.name) {
           this.emojis.set(ball.id, { id: created.id, name: created.name });
-          console.log(`[EmojiRegistry] Đã tải lên Discord Application Emoji: :${created.name}:`);
+          console.log(`[EmojiRegistry] Đã tải lên HD Application Emoji: :${created.name}:`);
         }
       } catch (error) {
         console.warn(
-          `[EmojiRegistry] Không thể upload emoji cho ${ball.id}, dùng emoji mặc định:`,
+          `[EmojiRegistry] Không thể upload emoji cho ${ball.id}, dùng ký hiệu mặc định:`,
           error instanceof Error ? error.message : error,
         );
       }

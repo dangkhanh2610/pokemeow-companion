@@ -4,21 +4,28 @@ import { BALL_CATALOG, getBallSpec, resolveBallId } from '../catalog/ball-catalo
 import { PokemonCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-catalog';
 import { CatchStrategyRegistry } from '../engine/catch-strategy';
 import { applyXp, computeIvSummary, SpawnEngine, xpForNextLevel } from '../engine/spawn-engine';
+import { isChannelAllowed, validatePrefix } from '../services/guild-config-service';
 
 describe('PokéVerse RPG Core Engine', () => {
-  it('PokemonCreatureCatalog tải đầy đủ toàn bộ 1,025 loài National Dex với đủ 5 độ hiếm', () => {
+  it('PokemonCreatureCatalog tải đủ 1,025 loài gốc + các dạng Mega/Gmax/Regional/Special', () => {
     const catalog = new PokemonCreatureCatalog();
     const all = catalog.getAll();
-    assert.equal(all.length, 1025);
+    const baseSpecies = all.filter((s) => s.formType === 'base');
+    const megaSpecies = all.filter((s) => s.formType === 'mega');
+
+    assert.equal(baseSpecies.length, 1025);
+    assert.ok(all.length > 1100);
+    assert.ok(megaSpecies.length >= 45);
 
     const uniqueIds = new Set(all.map((s) => s.id));
-    assert.equal(uniqueIds.size, 1025);
+    assert.equal(uniqueIds.size, all.length);
 
     assert.ok(catalog.getByRarity('common').length > 0);
     assert.ok(catalog.getByRarity('uncommon').length > 0);
     assert.ok(catalog.getByRarity('rare').length > 0);
     assert.ok(catalog.getByRarity('super_rare').length > 0);
     assert.ok(catalog.getByRarity('legendary').length > 0);
+    assert.ok(catalog.getByRarity('mega').length >= 45);
 
     const pikachu = catalog.getById(25);
     const mrMime = catalog.getById(122);
@@ -26,6 +33,9 @@ describe('PokéVerse RPG Core Engine', () => {
     const rayquaza = catalog.getById(384);
     const koraidon = catalog.getById(1007);
     const pecharunt = catalog.getById(1025);
+    const megaCharizardX = all.find((s) => s.name === 'Charizard-Mega-X');
+    const primalGroudon = all.find((s) => s.name === 'Groudon-Primal');
+    const megaRayquaza = all.find((s) => s.name === 'Rayquaza-Mega');
 
     assert.equal(pikachu?.name, 'Pikachu');
     assert.equal(mrMime?.name, 'Mr. Mime');
@@ -35,6 +45,10 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.equal(rayquaza?.rarity, 'legendary');
     assert.equal(koraidon?.name, 'Koraidon');
     assert.equal(pecharunt?.name, 'Pecharunt');
+    assert.equal(megaCharizardX?.rarity, 'mega');
+    assert.equal(megaCharizardX?.dexNumber, 6);
+    assert.equal(primalGroudon?.rarity, 'mega');
+    assert.equal(megaRayquaza?.rarity, 'mega');
     assert.ok(catalog.search('dragon').length >= 1);
 
     for (const species of all) {
@@ -92,6 +106,22 @@ describe('PokéVerse RPG Core Engine', () => {
     });
     assert.ok(premierLegendary > ultraLegendary);
 
+    const ultraMega = registry.calculateChance({
+      baseCatchRate: 0.08,
+      rarity: 'mega',
+      isShiny: false,
+      trainerLevel: 1,
+      ballId: 'ultraball',
+    });
+    const premierMega = registry.calculateChance({
+      baseCatchRate: 0.08,
+      rarity: 'mega',
+      isShiny: false,
+      trainerLevel: 1,
+      ballId: 'premierball',
+    });
+    assert.ok(premierMega > ultraMega);
+
     const lowLevelPoke = registry.calculateChance({
       baseCatchRate: 0.08,
       rarity: 'legendary',
@@ -142,5 +172,35 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.equal(res.xp, 20);
     assert.equal(res.leveledUp, true);
     assert.ok(RARITY_CONFIGS.legendary.xpReward > RARITY_CONFIGS.common.xpReward);
+  });
+
+  it('isChannelAllowed và validatePrefix xử lý đúng cấu hình server đa bot', () => {
+    assert.equal(
+      isChannelAllowed({ allowedChannels: [], blockedChannels: [] }, 'ch-1'),
+      true,
+    );
+    assert.equal(
+      isChannelAllowed({ allowedChannels: [], blockedChannels: ['ch-1'] }, 'ch-1'),
+      false,
+    );
+    assert.equal(
+      isChannelAllowed({ allowedChannels: ['ch-2'], blockedChannels: [] }, 'ch-1'),
+      false,
+    );
+    assert.equal(
+      isChannelAllowed({ allowedChannels: ['ch-2'], blockedChannels: ['ch-2'] }, 'ch-2'),
+      false,
+    );
+    assert.equal(
+      isChannelAllowed({ allowedChannels: ['ch-2'], blockedChannels: [] }, 'ch-2'),
+      true,
+    );
+
+    assert.equal(validatePrefix(' n! '), 'n!');
+    assert.equal(validatePrefix('.'), '.');
+    assert.equal(validatePrefix(''), null);
+    assert.equal(validatePrefix('a b'), null);
+    assert.equal(validatePrefix('toolong'), null);
+    assert.equal(validatePrefix('<@123>'), null);
   });
 });

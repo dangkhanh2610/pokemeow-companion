@@ -1,4 +1,6 @@
-export type RarityTier = 'common' | 'uncommon' | 'rare' | 'super_rare' | 'legendary';
+export type RarityTier = 'common' | 'uncommon' | 'rare' | 'super_rare' | 'legendary' | 'mega';
+
+export type CreatureFormType = 'base' | 'mega' | 'gmax' | 'regional' | 'special';
 
 export type BallId = 'pokeball' | 'greatball' | 'ultraball' | 'premierball' | 'masterball';
 
@@ -23,9 +25,11 @@ export interface CreatureBaseStats {
 
 export interface CreatureSpecies {
   readonly id: number;
+  readonly dexNumber: number;
   readonly slug: string;
   readonly name: string;
   readonly rarity: RarityTier;
+  readonly formType: CreatureFormType;
   readonly types: readonly string[];
   readonly baseStats: CreatureBaseStats;
   readonly baseCatchRate: number;

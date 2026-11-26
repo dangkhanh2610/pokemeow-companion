@@ -1,4 +1,5 @@
 import {
+  ChannelType,
   PermissionFlagsBits,
   SlashCommandBuilder,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
@@ -56,6 +57,23 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
         .setRequired(false)
         .setMinValue(1),
     )
+    .addStringOption((opt) =>
+      opt
+        .setName('filter')
+        .setDescription('Lọc theo shiny, mega, fav, legendary, super_rare, rare hoặc tên Pokémon')
+        .setRequired(false),
+    )
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('fav')
+    .setDescription('Khóa hoặc mở khóa Pokémon yêu thích để không bị thả nhầm khi dùng /release')
+    .addStringOption((opt) =>
+      opt
+        .setName('target')
+        .setDescription('Tên Pokémon hoặc mã ngắn (#abc123). Bỏ trống = Pokémon mới bắt nhất')
+        .setRequired(false),
+    )
     .toJSON(),
 
   new SlashCommandBuilder()
@@ -65,7 +83,9 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
 
   new SlashCommandBuilder()
     .setName('release')
-    .setDescription('Thả Pokémon trùng (giữ lại IV cao nhất, bỏ qua Shiny & Legendary) để nhận PokéCoins')
+    .setDescription(
+      'Thả Pokémon trùng (giữ IV cao nhất, mọi Shiny, Legendary và Pokémon yêu thích) để lấy PC',
+    )
     .toJSON(),
 
   new SlashCommandBuilder()
@@ -75,7 +95,7 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
 
   new SlashCommandBuilder()
     .setName('lb')
-    .setDescription('Xem bảng xếp hạng cộng đồng PokéVerse')
+    .setDescription('Xem bảng xếp hạng cộng đồng PokeNyan')
     .addStringOption((opt) =>
       opt
         .setName('metric')
@@ -92,7 +112,7 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
 
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('Xem hướng dẫn chơi và danh sách lệnh của PokéVerse')
+    .setDescription('Xem hướng dẫn chơi và danh sách lệnh của PokeNyan')
     .toJSON(),
 
   new SlashCommandBuilder()
@@ -109,6 +129,44 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
           { name: 'Tắt bot (Off)', value: 'off' },
           { name: 'Xem trạng thái (Status)', value: 'status' },
         ),
+    )
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('prefix')
+    .setDescription('Xem hoặc đổi prefix lệnh riêng cho server để tránh trùng bot khác (Admin)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption((opt) =>
+      opt
+        .setName('value')
+        .setDescription('Prefix mới (1–5 ký tự không dấu cách, ví dụ: n!, ., ?)')
+        .setRequired(false)
+        .setMaxLength(5),
+    )
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('channel')
+    .setDescription('Giới hạn kênh được phép hoặc cấm bot hoạt động trong server (Admin)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption((opt) =>
+      opt
+        .setName('action')
+        .setDescription('Thao tác với kênh')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Cho phép kênh (Allow)', value: 'allow' },
+          { name: 'Chặn kênh (Block)', value: 'block' },
+          { name: 'Xem danh sách (List)', value: 'list' },
+          { name: 'Cho phép lại tất cả (Reset)', value: 'reset' },
+        ),
+    )
+    .addChannelOption((opt) =>
+      opt
+        .setName('channel')
+        .setDescription('Chọn kênh áp dụng (mặc định là kênh hiện tại)')
+        .setRequired(false)
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
     )
     .toJSON(),
 ];

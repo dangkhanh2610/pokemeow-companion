@@ -15,6 +15,7 @@ const RARITY_ORDER: readonly RarityTier[] = [
   'rare',
   'super_rare',
   'legendary',
+  'mega',
 ];
 
 export type RandomFn = () => number;

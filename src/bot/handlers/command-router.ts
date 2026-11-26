@@ -8,20 +8,28 @@ import {
 } from 'discord.js';
 import { resolveBallId } from '@/game/catalog/ball-catalog';
 import { economyService } from '@/game/services/economy-service';
-import { encounterService } from '@/game/services/encounter-service';
-import { guildConfigService } from '@/game/services/guild-config-service';
+import { ENCOUNTER_TTL_MS, encounterService } from '@/game/services/encounter-service';
+import {
+  guildConfigService,
+  isChannelAllowed,
+  validatePrefix,
+} from '@/game/services/guild-config-service';
 import { leaderboardService } from '@/game/services/leaderboard-service';
 import { trainerService, type TrainerIdentityInput } from '@/game/services/trainer-service';
-import type { BallId, LeaderboardMetric } from '@/game/types';
+import type { BallId, CreatureSpecies, LeaderboardMetric } from '@/game/types';
 import {
   buildBagEmbed,
   buildBotStatusEmbed,
   buildCatchButtonsRow,
   buildCatchResultEmbed,
+  buildChannelSettingsEmbed,
   buildDailyEmbed,
   buildDexEmbed,
+  buildDexPaginationRow,
+  buildExpiredEncounterEmbed,
   buildHelpEmbed,
   buildLeaderboardEmbed,
+  buildPrefixEmbed,
   buildProfileEmbed,
   buildReleaseEmbed,
   buildShopEmbed,
@@ -56,15 +64,101 @@ function parseMetric(raw: string | undefined): LeaderboardMetric {
   }
 }
 
+function canReplyInMessageChannel(message: Message): boolean {
+  if (!message.guild) {
+    return false;
+  }
+  const me = message.guild.members.me;
+  if (!me) {
+    return true;
+  }
+  const channel = message.channel;
+  if ('permissionsFor' in channel) {
+    const perms = channel.permissionsFor(me);
+    if (!perms) {
+      return true;
+    }
+    return (
+      perms.has(PermissionFlagsBits.ViewChannel) &&
+      perms.has(PermissionFlagsBits.SendMessages) &&
+      perms.has(PermissionFlagsBits.EmbedLinks)
+    );
+  }
+  return true;
+}
+
+function parseChannelMentionId(raw: string | undefined, fallbackId: string): string | null {
+  if (!raw) {
+    return fallbackId;
+  }
+  const match = /^<#(\d+)>$/.exec(raw.trim()) ?? /^(\d{15,22})$/.exec(raw.trim());
+  return match?.[1] ?? null;
+}
+
+const ADMIN_SLASH_COMMANDS = new Set(['bot', 'prefix', 'channel']);
+const ADMIN_PREFIX_COMMANDS = new Set(['bot', 'prefix', 'channel']);
+
 export class BotCommandRouter {
-  private readonly prefix: string;
+  private readonly defaultPrefix: string;
   private readonly botName: string;
   private readonly ownerIds: ReadonlySet<string>;
+  private readonly encounterTimers = new Map<string, NodeJS.Timeout>();
 
-  public constructor(prefix: string, botName: string, ownerIds: readonly string[] = []) {
-    this.prefix = prefix;
+  public constructor(defaultPrefix: string, botName: string, ownerIds: readonly string[] = []) {
+    this.defaultPrefix = defaultPrefix;
     this.botName = botName;
     this.ownerIds = new Set(ownerIds);
+  }
+
+  public dispose(): void {
+    for (const timer of this.encounterTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.encounterTimers.clear();
+  }
+
+  private clearEncounterTimer(encounterId: string): void {
+    const existing = this.encounterTimers.get(encounterId);
+    if (existing) {
+      clearTimeout(existing);
+      this.encounterTimers.delete(encounterId);
+    }
+  }
+
+  private scheduleEncounterExpiry(
+    encounterId: string,
+    sentMessage: Message,
+    trainerDisplayName: string,
+    species: CreatureSpecies,
+    isShiny: boolean,
+  ): void {
+    this.clearEncounterTimer(encounterId);
+    const timer = setTimeout(() => {
+      this.encounterTimers.delete(encounterId);
+      void (async () => {
+        try {
+          const expired = await encounterService.expireEncounterIfOpen(encounterId);
+          if (!expired) {
+            return;
+          }
+          const disabledEmpty: Record<BallId, number> = {
+            pokeball: 0,
+            greatball: 0,
+            ultraball: 0,
+            premierball: 0,
+            masterball: 0,
+          };
+          await sentMessage.edit({
+            embeds: [buildExpiredEncounterEmbed(trainerDisplayName, species, isShiny)],
+            components: [buildCatchButtonsRow(encounterId, disabledEmpty, true)],
+          });
+        } catch {
+          // Bỏ qua nếu tin nhắn đã bị xóa hoặc bot mất quyền edit
+        }
+      })();
+    }, ENCOUNTER_TTL_MS + 500);
+    timer.unref();
+    this.encounterTimers.set(encounterId, timer);
   }
 
   private isAdminOrOwner(
@@ -80,13 +174,34 @@ export class BotCommandRouter {
     );
   }
 
+  private extractPrefixedBody(
+    content: string,
+    serverPrefix: string,
+    botUserId: string | undefined,
+  ): string | null {
+    if (content.startsWith(serverPrefix)) {
+      return content.slice(serverPrefix.length).trim();
+    }
+    if (botUserId) {
+      const mentionPrefix = `<@${botUserId}>`;
+      const nickMentionPrefix = `<@!${botUserId}>`;
+      if (content.startsWith(mentionPrefix)) {
+        return content.slice(mentionPrefix.length).trim();
+      }
+      if (content.startsWith(nickMentionPrefix)) {
+        return content.slice(nickMentionPrefix.length).trim();
+      }
+    }
+    return null;
+  }
+
   public async handleSlashCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     const meta = extractTrainerMeta(interaction.user);
 
-    if (interaction.commandName === 'bot') {
+    if (ADMIN_SLASH_COMMANDS.has(interaction.commandName)) {
       if (!interaction.guildId) {
         await interaction.reply({
-          content: '⚠️ Lệnh bật/tắt bot chỉ dùng trong server Discord.',
+          content: '⚠️ Lệnh quản trị này chỉ dùng trong server Discord.',
           ephemeral: true,
         });
         return;
@@ -94,44 +209,123 @@ export class BotCommandRouter {
       if (!this.isAdminOrOwner(interaction.user.id, interaction.memberPermissions)) {
         await interaction.reply({
           content:
-            '🔒 Chỉ Quản trị viên (Admin / Manage Server) mới có quyền bật hoặc tắt bot.',
+            '🔒 Chỉ Quản trị viên (Admin / Manage Server) mới có quyền dùng lệnh cấu hình này.',
           ephemeral: true,
         });
         return;
       }
-      const action = interaction.options.getString('action') ?? 'status';
-      if (action === 'on') {
-        const nextState = await guildConfigService.setGuildEnabled(
+
+      if (interaction.commandName === 'bot') {
+        const action = interaction.options.getString('action') ?? 'status';
+        if (action === 'on') {
+          const nextState = await guildConfigService.setGuildEnabled(
+            interaction.guildId,
+            true,
+            meta.displayName,
+          );
+          await interaction.reply({
+            embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+          });
+          return;
+        }
+        if (action === 'off') {
+          const nextState = await guildConfigService.setGuildEnabled(
+            interaction.guildId,
+            false,
+            meta.displayName,
+          );
+          await interaction.reply({
+            embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+          });
+          return;
+        }
+        const current = await guildConfigService.getGuildSettings(
           interaction.guildId,
-          true,
-          meta.displayName,
+          this.defaultPrefix,
         );
+        await interaction.reply({ embeds: [buildBotStatusEmbed(this.botName, current)] });
+        return;
+      }
+
+      if (interaction.commandName === 'prefix') {
+        const rawValue = interaction.options.getString('value');
+        if (!rawValue) {
+          const current = await guildConfigService.getGuildSettings(
+            interaction.guildId,
+            this.defaultPrefix,
+          );
+          await interaction.reply({ embeds: [buildPrefixEmbed(this.botName, current.prefix)] });
+          return;
+        }
+        const valid = validatePrefix(rawValue);
+        if (!valid) {
+          await interaction.reply({
+            content:
+              '❌ Prefix không hợp lệ (1–5 ký tự, không có dấu cách, không chứa `<`, `@` hoặc `` ` ``).',
+            ephemeral: true,
+          });
+          return;
+        }
+        const updated = await guildConfigService.setGuildPrefix(interaction.guildId, valid);
         await interaction.reply({
-          embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+          embeds: [buildPrefixEmbed(this.botName, updated.prefix, meta.displayName)],
         });
         return;
       }
-      if (action === 'off') {
-        const nextState = await guildConfigService.setGuildEnabled(
+
+      if (interaction.commandName === 'channel') {
+        const action = interaction.options.getString('action', true);
+        const selectedChannel = interaction.options.getChannel('channel');
+        const targetChannelId = selectedChannel?.id ?? interaction.channelId;
+
+        if (action === 'allow') {
+          const updated = await guildConfigService.allowChannel(
+            interaction.guildId,
+            targetChannelId,
+          );
+          await interaction.reply({ embeds: [buildChannelSettingsEmbed(this.botName, updated)] });
+          return;
+        }
+        if (action === 'block') {
+          const updated = await guildConfigService.blockChannel(
+            interaction.guildId,
+            targetChannelId,
+          );
+          await interaction.reply({ embeds: [buildChannelSettingsEmbed(this.botName, updated)] });
+          return;
+        }
+        if (action === 'reset') {
+          const updated = await guildConfigService.resetChannels(interaction.guildId);
+          await interaction.reply({ embeds: [buildChannelSettingsEmbed(this.botName, updated)] });
+          return;
+        }
+        const current = await guildConfigService.getGuildSettings(
           interaction.guildId,
-          false,
-          meta.displayName,
+          this.defaultPrefix,
         );
-        await interaction.reply({
-          embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
-        });
+        await interaction.reply({ embeds: [buildChannelSettingsEmbed(this.botName, current)] });
         return;
       }
-      const current = await guildConfigService.getGuildStatus(interaction.guildId);
-      await interaction.reply({ embeds: [buildBotStatusEmbed(this.botName, current)] });
-      return;
     }
 
+    let activePrefix = this.defaultPrefix;
     if (interaction.guildId) {
-      const guildState = await guildConfigService.getGuildStatus(interaction.guildId);
-      if (!guildState.enabled) {
+      const settings = await guildConfigService.getGuildSettings(
+        interaction.guildId,
+        this.defaultPrefix,
+      );
+      activePrefix = settings.prefix;
+
+      if (!settings.enabled) {
         await interaction.reply({
           content: '🔴 Bot hiện đang tạm tắt trong server này bởi Quản trị viên.',
+          ephemeral: true,
+        });
+        return;
+      }
+      if (!isChannelAllowed(settings, interaction.channelId)) {
+        await interaction.reply({
+          content: '🚫 Kênh này không nằm trong danh sách kênh hoạt động của bot.',
           ephemeral: true,
         });
         return;
@@ -143,6 +337,10 @@ export class BotCommandRouter {
         await interaction.deferReply();
         const result = await encounterService.spawnWildEncounter(meta, interaction.channelId);
         if (!result.ok) {
+          if (result.reason === 'SPAWN_IN_FLIGHT') {
+            await interaction.editReply('⏳ Đang xử lý lượt tìm trước đó của bạn...');
+            return;
+          }
           if (result.reason === 'COOLDOWN') {
             const sec = ((result.remainingMs ?? 1000) / 1000).toFixed(1);
             await interaction.editReply(`⏱️ Bạn đang hồi sức! Chờ **${sec}s** nữa nhé.`);
@@ -153,15 +351,30 @@ export class BotCommandRouter {
           );
           return;
         }
-        await interaction.editReply({
-          embeds: [buildWildEncounterEmbed(meta.displayName, meta.avatarUrl, result.roll, result.expiresAt)],
+        const sentMessage = await interaction.editReply({
+          embeds: [
+            buildWildEncounterEmbed(
+              meta.displayName,
+              meta.avatarUrl,
+              result.roll,
+              result.expiresAt,
+              result.rescueGranted,
+            ),
+          ],
           components: [buildCatchButtonsRow(result.encounterId, result.ballInventory)],
         });
+        this.scheduleEncounterExpiry(
+          result.encounterId,
+          sentMessage,
+          meta.displayName,
+          result.roll.species,
+          result.roll.isShiny,
+        );
         return;
       }
 
       case 'shop': {
-        await interaction.reply({ embeds: [buildShopEmbed(this.prefix)] });
+        await interaction.reply({ embeds: [buildShopEmbed(activePrefix)] });
         return;
       }
 
@@ -206,8 +419,33 @@ export class BotCommandRouter {
         await interaction.deferReply();
         await trainerService.ensureTrainer(meta);
         const page = interaction.options.getInteger('page') ?? 1;
-        const dex = await trainerService.getTrainerDex(meta.userId, page, 10);
-        await interaction.editReply({ embeds: [buildDexEmbed(meta.displayName, dex)] });
+        const filter = interaction.options.getString('filter') ?? '';
+        const dex = await trainerService.getTrainerDex(meta.userId, page, 10, filter);
+        await interaction.editReply({
+          embeds: [buildDexEmbed(meta.displayName, dex)],
+          components:
+            dex.totalPages > 1
+              ? [buildDexPaginationRow(meta.userId, dex.filter, dex.page, dex.totalPages)]
+              : [],
+        });
+        return;
+      }
+
+      case 'fav': {
+        await interaction.deferReply();
+        const target = interaction.options.getString('target') ?? undefined;
+        const res = await trainerService.toggleFavorite(meta, target);
+        if (!res.ok) {
+          await interaction.editReply(`❌ ${res.message}`);
+          return;
+        }
+        const shiny = res.isShiny ? '★ ' : '';
+        const statusText = res.isFavorite
+          ? '♥ Đã thêm vào danh sách Yêu thích (được bảo vệ khỏi `/release`).'
+          : '💔 Đã gỡ khỏi danh sách Yêu thích.';
+        await interaction.editReply(
+          `${statusText}\n└ ${shiny}**${res.speciesName}** (${res.ivPercent}% IV · \`#${res.shortId}\`)`,
+        );
         return;
       }
 
@@ -246,7 +484,7 @@ export class BotCommandRouter {
       }
 
       case 'help': {
-        await interaction.reply({ embeds: [buildHelpEmbed(this.prefix, this.botName)] });
+        await interaction.reply({ embeds: [buildHelpEmbed(activePrefix, this.botName)] });
         return;
       }
     }
@@ -257,12 +495,21 @@ export class BotCommandRouter {
       return;
     }
 
-    if (!message.content.startsWith(this.prefix)) {
+    const settings = await guildConfigService.getGuildSettings(
+      message.guild.id,
+      this.defaultPrefix,
+    );
+
+    const body = this.extractPrefixedBody(
+      message.content,
+      settings.prefix,
+      message.client.user?.id,
+    );
+    if (!body) {
       return;
     }
 
-    const body = message.content.slice(this.prefix.length).trim();
-    if (!body) {
+    if (!canReplyInMessageChannel(message)) {
       return;
     }
 
@@ -272,43 +519,94 @@ export class BotCommandRouter {
     const arg2 = parts[2];
     const meta = extractTrainerMeta(message.author);
 
-    if (command === 'bot') {
+    if (ADMIN_PREFIX_COMMANDS.has(command)) {
       if (!this.isAdminOrOwner(message.author.id, message.member?.permissions)) {
         await message.reply(
-          '🔒 Chỉ Quản trị viên (Admin / Manage Server) mới có quyền bật hoặc tắt bot.',
+          '🔒 Chỉ Quản trị viên (Admin / Manage Server) mới có quyền dùng lệnh cấu hình này.',
         );
         return;
       }
-      const sub = arg1?.toLowerCase() ?? 'status';
-      if (sub === 'on' || sub === 'enable') {
-        const nextState = await guildConfigService.setGuildEnabled(
-          message.guild.id,
-          true,
-          meta.displayName,
-        );
+
+      if (command === 'bot') {
+        const sub = arg1?.toLowerCase() ?? 'status';
+        if (sub === 'on' || sub === 'enable') {
+          const nextState = await guildConfigService.setGuildEnabled(
+            message.guild.id,
+            true,
+            meta.displayName,
+          );
+          await message.reply({
+            embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+          });
+          return;
+        }
+        if (sub === 'off' || sub === 'disable') {
+          const nextState = await guildConfigService.setGuildEnabled(
+            message.guild.id,
+            false,
+            meta.displayName,
+          );
+          await message.reply({
+            embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+          });
+          return;
+        }
+        await message.reply({ embeds: [buildBotStatusEmbed(this.botName, settings)] });
+        return;
+      }
+
+      if (command === 'prefix') {
+        if (!arg1) {
+          await message.reply({ embeds: [buildPrefixEmbed(this.botName, settings.prefix)] });
+          return;
+        }
+        const valid = validatePrefix(arg1);
+        if (!valid) {
+          await message.reply(
+            '❌ Prefix không hợp lệ (1–5 ký tự, không có dấu cách, không chứa `<`, `@` hoặc `` ` ``).',
+          );
+          return;
+        }
+        const updated = await guildConfigService.setGuildPrefix(message.guild.id, valid);
         await message.reply({
-          embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+          embeds: [buildPrefixEmbed(this.botName, updated.prefix, meta.displayName)],
         });
         return;
       }
-      if (sub === 'off' || sub === 'disable') {
-        const nextState = await guildConfigService.setGuildEnabled(
-          message.guild.id,
-          false,
-          meta.displayName,
-        );
-        await message.reply({
-          embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
-        });
+
+      if (command === 'channel') {
+        const sub = arg1?.toLowerCase() ?? 'list';
+        const targetId = parseChannelMentionId(arg2, message.channelId);
+
+        if (sub === 'allow') {
+          if (!targetId) {
+            await message.reply('❌ Kênh không hợp lệ. Ví dụ: `channel allow #pokenyan`');
+            return;
+          }
+          const updated = await guildConfigService.allowChannel(message.guild.id, targetId);
+          await message.reply({ embeds: [buildChannelSettingsEmbed(this.botName, updated)] });
+          return;
+        }
+        if (sub === 'block') {
+          if (!targetId) {
+            await message.reply('❌ Kênh không hợp lệ. Ví dụ: `channel block #general`');
+            return;
+          }
+          const updated = await guildConfigService.blockChannel(message.guild.id, targetId);
+          await message.reply({ embeds: [buildChannelSettingsEmbed(this.botName, updated)] });
+          return;
+        }
+        if (sub === 'reset') {
+          const updated = await guildConfigService.resetChannels(message.guild.id);
+          await message.reply({ embeds: [buildChannelSettingsEmbed(this.botName, updated)] });
+          return;
+        }
+        await message.reply({ embeds: [buildChannelSettingsEmbed(this.botName, settings)] });
         return;
       }
-      const current = await guildConfigService.getGuildStatus(message.guild.id);
-      await message.reply({ embeds: [buildBotStatusEmbed(this.botName, current)] });
-      return;
     }
 
-    const guildState = await guildConfigService.getGuildStatus(message.guild.id);
-    if (!guildState.enabled) {
+    if (!settings.enabled || !isChannelAllowed(settings, message.channelId)) {
       return;
     }
 
@@ -317,6 +615,9 @@ export class BotCommandRouter {
       case 'pokemon': {
         const result = await encounterService.spawnWildEncounter(meta, message.channelId);
         if (!result.ok) {
+          if (result.reason === 'SPAWN_IN_FLIGHT') {
+            return;
+          }
           if (result.reason === 'COOLDOWN') {
             const sec = ((result.remainingMs ?? 1000) / 1000).toFixed(1);
             await message.reply(`⏱️ Bạn đang hồi sức! Chờ **${sec}s** nữa nhé.`);
@@ -327,15 +628,30 @@ export class BotCommandRouter {
           );
           return;
         }
-        await message.reply({
-          embeds: [buildWildEncounterEmbed(meta.displayName, meta.avatarUrl, result.roll, result.expiresAt)],
+        const sentMessage = await message.reply({
+          embeds: [
+            buildWildEncounterEmbed(
+              meta.displayName,
+              meta.avatarUrl,
+              result.roll,
+              result.expiresAt,
+              result.rescueGranted,
+            ),
+          ],
           components: [buildCatchButtonsRow(result.encounterId, result.ballInventory)],
         });
+        this.scheduleEncounterExpiry(
+          result.encounterId,
+          sentMessage,
+          meta.displayName,
+          result.roll.species,
+          result.roll.isShiny,
+        );
         return;
       }
 
       case 'shop': {
-        await message.reply({ embeds: [buildShopEmbed(this.prefix)] });
+        await message.reply({ embeds: [buildShopEmbed(settings.prefix)] });
         return;
       }
 
@@ -343,7 +659,7 @@ export class BotCommandRouter {
       case 'b': {
         if (!arg1) {
           await message.reply(
-            `💡 Cách dùng: \`${this.prefix}buy <pb|gb|ub|prb|mb> [số_lượng]\` — ví dụ: \`${this.prefix}buy pb 10\``,
+            `💡 Cách dùng: \`${settings.prefix}buy <pb|gb|ub|prb|mb> [số_lượng]\` — ví dụ: \`${settings.prefix}buy pb 10\``,
           );
           return;
         }
@@ -384,10 +700,44 @@ export class BotCommandRouter {
       case 'dex':
       case 'pokedex': {
         await trainerService.ensureTrainer(meta);
-        const parsedPage = arg1 ? Number.parseInt(arg1, 10) : 1;
-        const page = Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
-        const dex = await trainerService.getTrainerDex(meta.userId, page, 10);
-        await message.reply({ embeds: [buildDexEmbed(meta.displayName, dex)] });
+        let page = 1;
+        let filter = '';
+        if (arg1) {
+          if (/^\d+$/.test(arg1)) {
+            page = Math.max(1, Number.parseInt(arg1, 10));
+            filter = parts.slice(2).join(' ');
+          } else {
+            filter = arg1;
+            const maybePage = arg2 && /^\d+$/.test(arg2) ? Number.parseInt(arg2, 10) : 1;
+            page = Math.max(1, maybePage);
+          }
+        }
+        const dex = await trainerService.getTrainerDex(meta.userId, page, 10, filter);
+        await message.reply({
+          embeds: [buildDexEmbed(meta.displayName, dex)],
+          components:
+            dex.totalPages > 1
+              ? [buildDexPaginationRow(meta.userId, dex.filter, dex.page, dex.totalPages)]
+              : [],
+        });
+        return;
+      }
+
+      case 'fav':
+      case 'favorite': {
+        const target = parts.slice(1).join(' ') || undefined;
+        const res = await trainerService.toggleFavorite(meta, target);
+        if (!res.ok) {
+          await message.reply(`❌ ${res.message}`);
+          return;
+        }
+        const shiny = res.isShiny ? '★ ' : '';
+        const statusText = res.isFavorite
+          ? '♥ Đã thêm vào danh sách Yêu thích (bảo vệ khỏi `release`).'
+          : '💔 Đã gỡ khỏi danh sách Yêu thích.';
+        await message.reply(
+          `${statusText}\n└ ${shiny}**${res.speciesName}** (${res.ivPercent}% IV · \`#${res.shortId}\`)`,
+        );
         return;
       }
 
@@ -424,22 +774,67 @@ export class BotCommandRouter {
 
       case 'help':
       case 'h': {
-        await message.reply({ embeds: [buildHelpEmbed(this.prefix, this.botName)] });
+        await message.reply({ embeds: [buildHelpEmbed(settings.prefix, this.botName)] });
         return;
       }
     }
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
+    if (interaction.customId.startsWith('dex:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const ownerId = parts[1];
+      const targetPage = Number.parseInt(parts[2] ?? '1', 10);
+      const filter = decodeURIComponent(parts[3] ?? '');
+
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: '⚠️ Bạn không thể lật trang Pokédex của huấn luyện viên khác!',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const meta = extractTrainerMeta(interaction.user);
+      const dex = await trainerService.getTrainerDex(
+        ownerId,
+        Number.isNaN(targetPage) ? 1 : targetPage,
+        10,
+        filter,
+      );
+      await interaction.editReply({
+        embeds: [buildDexEmbed(meta.displayName, dex)],
+        components:
+          dex.totalPages > 1
+            ? [buildDexPaginationRow(ownerId, dex.filter, dex.page, dex.totalPages)]
+            : [],
+      });
+      return;
+    }
+
     if (!interaction.customId.startsWith('catch:')) {
       return;
     }
 
+    // Xác nhận tương tác với Discord ngay dưới 3 giây để tránh Unknown Interaction khi Neon cold start
+    await interaction.deferUpdate();
+
     if (interaction.guildId) {
-      const guildState = await guildConfigService.getGuildStatus(interaction.guildId);
-      if (!guildState.enabled) {
-        await interaction.reply({
+      const settings = await guildConfigService.getGuildSettings(
+        interaction.guildId,
+        this.defaultPrefix,
+      );
+      if (!settings.enabled) {
+        await interaction.followUp({
           content: '🔴 Bot hiện đang tạm tắt trong server này bởi Quản trị viên.',
+          ephemeral: true,
+        });
+        return;
+      }
+      if (!isChannelAllowed(settings, interaction.channelId)) {
+        await interaction.followUp({
+          content: '🚫 Kênh này không nằm trong danh sách kênh hoạt động của bot.',
           ephemeral: true,
         });
         return;
@@ -466,12 +861,14 @@ export class BotCommandRouter {
     );
 
     if (!outcome.ok) {
-      await interaction.reply({
+      await interaction.followUp({
         content: `⚠️ ${outcome.message}`,
         ephemeral: true,
       });
       return;
     }
+
+    this.clearEncounterTimer(encounterId);
 
     const meta = extractTrainerMeta(interaction.user);
     const emptyInventory: Record<BallId, number> = {
@@ -482,7 +879,7 @@ export class BotCommandRouter {
       masterball: 0,
     };
 
-    await interaction.update({
+    await interaction.editReply({
       embeds: [buildThrowingEmbed(meta.displayName, outcome.species, outcome.isShiny, outcome.ballId)],
       components: [buildCatchButtonsRow(encounterId, emptyInventory, true)],
     });

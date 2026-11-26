@@ -32,7 +32,10 @@ export class PremierBallCatchStrategy implements ICatchStrategy {
     const ball = getBallSpec(input.ballId);
     const levelBonus = Math.min(input.trainerLevel * 0.0025, 0.08);
     const isHighValue =
-      input.isShiny || input.rarity === 'super_rare' || input.rarity === 'legendary';
+      input.isShiny ||
+      input.rarity === 'super_rare' ||
+      input.rarity === 'legendary' ||
+      input.rarity === 'mega';
     const premierBonus = isHighValue ? 0.15 : 0;
     const shinyPenalty = input.isShiny ? 0.78 : 1.0;
     const raw = input.baseCatchRate * ball.multiplier * shinyPenalty + levelBonus + premierBonus;

@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { getPrismaClient } from '@/lib/prisma';
+import { getPrismaClient, withDbRetry } from '@/lib/prisma';
 import { BALL_CATALOG } from '../catalog/ball-catalog';
 import type { BallId, DailyRewardResult } from '../types';
 
@@ -46,6 +46,7 @@ export interface PaginatedDexResult {
     readonly speciesName: string;
     readonly rarity: string;
     readonly isShiny: boolean;
+    readonly isFavorite: boolean;
     readonly ivTotal: number;
     readonly ivPercent: number;
     readonly level: number;
@@ -55,7 +56,23 @@ export interface PaginatedDexResult {
   readonly totalCount: number;
   readonly page: number;
   readonly totalPages: number;
+  readonly filter: string;
 }
+
+export type ToggleFavoriteResult =
+  | {
+      readonly ok: true;
+      readonly speciesId: number;
+      readonly speciesName: string;
+      readonly isShiny: boolean;
+      readonly ivPercent: number;
+      readonly isFavorite: boolean;
+      readonly shortId: string;
+    }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    };
 
 const STARTER_COINS = 2500;
 const STARTER_BALLS: Readonly<Record<BallId, number>> = {
@@ -83,12 +100,55 @@ export function isBallId(value: string): value is BallId {
   return BALL_CATALOG.some((ball) => ball.id === value);
 }
 
+function buildDexWhereClause(userId: string, rawFilter: string): Prisma.CaughtCreatureWhereInput {
+  const where: Prisma.CaughtCreatureWhereInput = { userId, released: false };
+  const normalized = rawFilter.trim().toLowerCase();
+
+  if (!normalized || normalized === 'all') {
+    return where;
+  }
+  if (normalized === 'shiny') {
+    return { ...where, isShiny: true };
+  }
+  if (normalized === 'fav' || normalized === 'favorite' || normalized === 'favorites') {
+    return { ...where, isFavorite: true };
+  }
+  if (
+    normalized === 'common' ||
+    normalized === 'uncommon' ||
+    normalized === 'rare' ||
+    normalized === 'super_rare' ||
+    normalized === 'legendary' ||
+    normalized === 'mega'
+  ) {
+    return { ...where, rarity: normalized };
+  }
+  if (normalized === 'superrare' || normalized === 'sr') {
+    return { ...where, rarity: 'super_rare' };
+  }
+
+  const numericStr = normalized.replace(/^#/, '');
+  if (/^\d+$/.test(numericStr)) {
+    const parsedNum = Number.parseInt(numericStr, 10);
+    if (Number.isFinite(parsedNum) && parsedNum > 0) {
+      return { ...where, speciesId: parsedNum };
+    }
+  }
+
+  return {
+    ...where,
+    speciesName: { contains: rawFilter.trim(), mode: 'insensitive' },
+  };
+}
+
 export class TrainerService {
   public async ensureTrainer(input: TrainerIdentityInput) {
     const prisma = getPrismaClient();
-    const existing = await prisma.trainer.findUnique({
-      where: { userId: input.userId },
-    });
+    const existing = await withDbRetry(() =>
+      prisma.trainer.findUnique({
+        where: { userId: input.userId },
+      }),
+    );
 
     if (existing) {
       if (
@@ -96,61 +156,65 @@ export class TrainerService {
         existing.displayName !== input.displayName ||
         existing.avatarUrl !== input.avatarUrl
       ) {
-        return prisma.trainer.update({
-          where: { userId: input.userId },
-          data: {
-            username: input.username,
-            displayName: input.displayName,
-            avatarUrl: input.avatarUrl,
-          },
-        });
+        return withDbRetry(() =>
+          prisma.trainer.update({
+            where: { userId: input.userId },
+            data: {
+              username: input.username,
+              displayName: input.displayName,
+              avatarUrl: input.avatarUrl,
+            },
+          }),
+        );
       }
       return existing;
     }
 
     try {
-      return await prisma.$transaction(async (tx) => {
-        const created = await tx.trainer.create({
-          data: {
-            userId: input.userId,
-            username: input.username,
-            displayName: input.displayName,
-            avatarUrl: input.avatarUrl,
-            coins: STARTER_COINS,
-          },
-        });
+      return await withDbRetry(() =>
+        prisma.$transaction(async (tx) => {
+          const created = await tx.trainer.create({
+            data: {
+              userId: input.userId,
+              username: input.username,
+              displayName: input.displayName,
+              avatarUrl: input.avatarUrl,
+              coins: STARTER_COINS,
+            },
+          });
 
-        for (const ball of BALL_CATALOG) {
-          const qty = STARTER_BALLS[ball.id];
-          if (qty > 0) {
-            await tx.inventoryItem.create({
-              data: {
-                userId: input.userId,
-                itemId: ball.id,
-                quantity: qty,
-              },
-            });
+          for (const ball of BALL_CATALOG) {
+            const qty = STARTER_BALLS[ball.id];
+            if (qty > 0) {
+              await tx.inventoryItem.create({
+                data: {
+                  userId: input.userId,
+                  itemId: ball.id,
+                  quantity: qty,
+                },
+              });
+            }
           }
-        }
 
-        const starterMetadata: Prisma.InputJsonObject = {
-          pokeball: STARTER_BALLS.pokeball,
-          greatball: STARTER_BALLS.greatball,
-          ultraball: STARTER_BALLS.ultraball,
-        };
+          const starterMetadata: Prisma.InputJsonObject = {
+            pokeball: STARTER_BALLS.pokeball,
+            greatball: STARTER_BALLS.greatball,
+            ultraball: STARTER_BALLS.ultraball,
+          };
 
-        await tx.economyTransaction.create({
-          data: {
-            idempotencyKey: `starter:${input.userId}`,
-            userId: input.userId,
-            type: 'STARTER_KIT',
-            coinsDelta: STARTER_COINS,
-            metadata: starterMetadata,
-          },
-        });
+          await tx.economyTransaction.create({
+            data: {
+              idempotencyKey: `starter:${input.userId}`,
+              userId: input.userId,
+              type: 'STARTER_KIT',
+              coinsDelta: STARTER_COINS,
+              metadata: starterMetadata,
+            },
+          });
 
-        return created;
-      });
+          return created;
+        }),
+      );
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         return prisma.trainer.findUniqueOrThrow({ where: { userId: input.userId } });
@@ -161,43 +225,47 @@ export class TrainerService {
 
   public async getTrainerProfile(userId: string): Promise<TrainerBagSummary | null> {
     const prisma = getPrismaClient();
-    const trainer = await prisma.trainer.findUnique({
-      where: { userId },
-      include: {
-        inventory: true,
-      },
-    });
+    const trainer = await withDbRetry(() =>
+      prisma.trainer.findUnique({
+        where: { userId },
+        include: {
+          inventory: true,
+        },
+      }),
+    );
 
     if (!trainer) {
       return null;
     }
 
-    const [activeCreatureCount, distinctSpecies, topCreatures] = await Promise.all([
-      prisma.caughtCreature.count({
-        where: { userId, released: false },
-      }),
-      prisma.caughtCreature.findMany({
-        where: { userId, released: false },
-        distinct: ['speciesId'],
-        select: { speciesId: true },
-      }),
-      prisma.caughtCreature.findMany({
-        where: { userId, released: false },
-        orderBy: [{ isShiny: 'desc' }, { ivTotal: 'desc' }, { caughtAt: 'desc' }],
-        take: 5,
-        select: {
-          id: true,
-          speciesId: true,
-          speciesName: true,
-          rarity: true,
-          isShiny: true,
-          ivTotal: true,
-          ivPercent: true,
-          ballUsed: true,
-          caughtAt: true,
-        },
-      }),
-    ]);
+    const [activeCreatureCount, distinctSpecies, topCreatures] = await withDbRetry(() =>
+      Promise.all([
+        prisma.caughtCreature.count({
+          where: { userId, released: false },
+        }),
+        prisma.caughtCreature.findMany({
+          where: { userId, released: false },
+          distinct: ['speciesId'],
+          select: { speciesId: true },
+        }),
+        prisma.caughtCreature.findMany({
+          where: { userId, released: false },
+          orderBy: [{ isShiny: 'desc' }, { ivTotal: 'desc' }, { caughtAt: 'desc' }],
+          take: 5,
+          select: {
+            id: true,
+            speciesId: true,
+            speciesName: true,
+            rarity: true,
+            isShiny: true,
+            ivTotal: true,
+            ivPercent: true,
+            ballUsed: true,
+            caughtAt: true,
+          },
+        }),
+      ]),
+    );
 
     const balls = emptyBallInventory();
     for (const item of trainer.inventory) {
@@ -230,17 +298,23 @@ export class TrainerService {
     userId: string,
     page = 1,
     pageSize = 10,
+    filter = '',
   ): Promise<PaginatedDexResult> {
     const prisma = getPrismaClient();
     const safePage = Math.max(1, Math.floor(page));
     const safeSize = Math.min(20, Math.max(1, Math.floor(pageSize)));
+    const normalizedFilter = filter.trim();
+    const where = buildDexWhereClause(userId, normalizedFilter);
 
-    const [totalCount, items] = await Promise.all([
-      prisma.caughtCreature.count({ where: { userId, released: false } }),
+    const totalCount = await withDbRetry(() => prisma.caughtCreature.count({ where }));
+    const totalPages = Math.max(1, Math.ceil(totalCount / safeSize));
+    const clampedPage = Math.min(safePage, totalPages);
+
+    const items = await withDbRetry(() =>
       prisma.caughtCreature.findMany({
-        where: { userId, released: false },
+        where,
         orderBy: [{ caughtAt: 'desc' }],
-        skip: (safePage - 1) * safeSize,
+        skip: (clampedPage - 1) * safeSize,
         take: safeSize,
         select: {
           id: true,
@@ -248,6 +322,7 @@ export class TrainerService {
           speciesName: true,
           rarity: true,
           isShiny: true,
+          isFavorite: true,
           ivTotal: true,
           ivPercent: true,
           level: true,
@@ -255,15 +330,80 @@ export class TrainerService {
           caughtAt: true,
         },
       }),
-    ]);
-
-    const totalPages = Math.max(1, Math.ceil(totalCount / safeSize));
+    );
 
     return {
       items,
       totalCount,
-      page: Math.min(safePage, totalPages),
+      page: clampedPage,
       totalPages,
+      filter: normalizedFilter.toLowerCase(),
+    };
+  }
+
+  public async toggleFavorite(
+    userMeta: TrainerIdentityInput,
+    target?: string,
+  ): Promise<ToggleFavoriteResult> {
+    await this.ensureTrainer(userMeta);
+    const prisma = getPrismaClient();
+    const clean = target?.trim().replace(/^#/, '') ?? '';
+
+    const candidate = await withDbRetry(async () => {
+      if (!clean) {
+        return prisma.caughtCreature.findFirst({
+          where: { userId: userMeta.userId, released: false },
+          orderBy: { caughtAt: 'desc' },
+        });
+      }
+
+      const byId = await prisma.caughtCreature.findFirst({
+        where: {
+          userId: userMeta.userId,
+          released: false,
+          OR: [{ id: clean }, { id: { endsWith: clean } }],
+        },
+        orderBy: { caughtAt: 'desc' },
+      });
+
+      if (byId) {
+        return byId;
+      }
+
+      return prisma.caughtCreature.findFirst({
+        where: {
+          userId: userMeta.userId,
+          released: false,
+          speciesName: { contains: clean, mode: 'insensitive' },
+        },
+        orderBy: [{ isShiny: 'desc' }, { ivTotal: 'desc' }, { caughtAt: 'desc' }],
+      });
+    });
+
+    if (!candidate) {
+      return {
+        ok: false,
+        message: clean
+          ? `Không tìm thấy Pokémon nào khớp với \`${clean}\` trong kho của bạn.`
+          : 'Kho Pokémon của bạn đang trống, chưa thể đánh dấu yêu thích.',
+      };
+    }
+
+    const updated = await withDbRetry(() =>
+      prisma.caughtCreature.update({
+        where: { id: candidate.id },
+        data: { isFavorite: !candidate.isFavorite },
+      }),
+    );
+
+    return {
+      ok: true,
+      speciesId: updated.speciesId,
+      speciesName: updated.speciesName,
+      isShiny: updated.isShiny,
+      ivPercent: updated.ivPercent,
+      isFavorite: updated.isFavorite,
+      shortId: updated.id.slice(-6),
     };
   }
 
@@ -274,112 +414,116 @@ export class TrainerService {
     await this.ensureTrainer(userMeta);
     const prisma = getPrismaClient();
 
-    return prisma.$transaction(async (tx) => {
-      const existingTx = await tx.economyTransaction.findUnique({
-        where: { idempotencyKey },
-      });
-      const trainer = await tx.trainer.findUniqueOrThrow({
-        where: { userId: userMeta.userId },
-      });
+    return withDbRetry(() =>
+      prisma.$transaction(async (tx) => {
+        const existingTx = await tx.economyTransaction.findUnique({
+          where: { idempotencyKey },
+        });
+        const trainer = await tx.trainer.findUniqueOrThrow({
+          where: { userId: userMeta.userId },
+        });
 
-      if (existingTx) {
-        return {
-          ok: true,
-          alreadyClaimed: false,
-          nextAvailableAt: new Date((trainer.lastDailyAt ?? new Date()).getTime() + DAILY_COOLDOWN_MS),
-          streak: trainer.dailyStreak,
-          coinsEarned: existingTx.coinsDelta,
-          pokeballsEarned: 3,
-          greatballsEarned: 1,
-          newCoinsBalance: trainer.coins,
-        };
-      }
-
-      const now = new Date();
-      if (trainer.lastDailyAt) {
-        const elapsed = now.getTime() - trainer.lastDailyAt.getTime();
-        if (elapsed < DAILY_COOLDOWN_MS) {
+        if (existingTx) {
           return {
-            ok: false,
-            alreadyClaimed: true,
-            nextAvailableAt: new Date(trainer.lastDailyAt.getTime() + DAILY_COOLDOWN_MS),
+            ok: true,
+            alreadyClaimed: false,
+            nextAvailableAt: new Date(
+              (trainer.lastDailyAt ?? new Date()).getTime() + DAILY_COOLDOWN_MS,
+            ),
             streak: trainer.dailyStreak,
-            coinsEarned: 0,
-            pokeballsEarned: 0,
-            greatballsEarned: 0,
+            coinsEarned: existingTx.coinsDelta,
+            pokeballsEarned: 3,
+            greatballsEarned: 1,
             newCoinsBalance: trainer.coins,
           };
         }
-      }
 
-      const keepStreak =
-        trainer.lastDailyAt !== null &&
-        now.getTime() - trainer.lastDailyAt.getTime() <= STREAK_GRACE_MS;
-      const newStreak = keepStreak ? trainer.dailyStreak + 1 : 1;
-      const coinsEarned = 1000 + Math.min(newStreak, 10) * 200;
-      const pokeballsEarned = 3;
-      const greatballsEarned = 1;
+        const now = new Date();
+        if (trainer.lastDailyAt) {
+          const elapsed = now.getTime() - trainer.lastDailyAt.getTime();
+          if (elapsed < DAILY_COOLDOWN_MS) {
+            return {
+              ok: false,
+              alreadyClaimed: true,
+              nextAvailableAt: new Date(trainer.lastDailyAt.getTime() + DAILY_COOLDOWN_MS),
+              streak: trainer.dailyStreak,
+              coinsEarned: 0,
+              pokeballsEarned: 0,
+              greatballsEarned: 0,
+              newCoinsBalance: trainer.coins,
+            };
+          }
+        }
 
-      const updatedTrainer = await tx.trainer.update({
-        where: { userId: userMeta.userId },
-        data: {
-          coins: { increment: coinsEarned },
-          dailyStreak: newStreak,
-          lastDailyAt: now,
-        },
-      });
+        const keepStreak =
+          trainer.lastDailyAt !== null &&
+          now.getTime() - trainer.lastDailyAt.getTime() <= STREAK_GRACE_MS;
+        const newStreak = keepStreak ? trainer.dailyStreak + 1 : 1;
+        const coinsEarned = 1000 + Math.min(newStreak, 10) * 200;
+        const pokeballsEarned = 3;
+        const greatballsEarned = 1;
 
-      await tx.inventoryItem.upsert({
-        where: {
-          userId_itemId: { userId: userMeta.userId, itemId: 'pokeball' },
-        },
-        update: { quantity: { increment: pokeballsEarned } },
-        create: {
-          userId: userMeta.userId,
-          itemId: 'pokeball',
-          quantity: pokeballsEarned,
-        },
-      });
+        const updatedTrainer = await tx.trainer.update({
+          where: { userId: userMeta.userId },
+          data: {
+            coins: { increment: coinsEarned },
+            dailyStreak: newStreak,
+            lastDailyAt: now,
+          },
+        });
 
-      await tx.inventoryItem.upsert({
-        where: {
-          userId_itemId: { userId: userMeta.userId, itemId: 'greatball' },
-        },
-        update: { quantity: { increment: greatballsEarned } },
-        create: {
-          userId: userMeta.userId,
-          itemId: 'greatball',
-          quantity: greatballsEarned,
-        },
-      });
+        await tx.inventoryItem.upsert({
+          where: {
+            userId_itemId: { userId: userMeta.userId, itemId: 'pokeball' },
+          },
+          update: { quantity: { increment: pokeballsEarned } },
+          create: {
+            userId: userMeta.userId,
+            itemId: 'pokeball',
+            quantity: pokeballsEarned,
+          },
+        });
 
-      const meta: Prisma.InputJsonObject = {
-        streak: newStreak,
-        pokeballsEarned,
-        greatballsEarned,
-      };
+        await tx.inventoryItem.upsert({
+          where: {
+            userId_itemId: { userId: userMeta.userId, itemId: 'greatball' },
+          },
+          update: { quantity: { increment: greatballsEarned } },
+          create: {
+            userId: userMeta.userId,
+            itemId: 'greatball',
+            quantity: greatballsEarned,
+          },
+        });
 
-      await tx.economyTransaction.create({
-        data: {
-          idempotencyKey,
-          userId: userMeta.userId,
-          type: 'DAILY_REWARD',
-          coinsDelta: coinsEarned,
-          metadata: meta,
-        },
-      });
+        const meta: Prisma.InputJsonObject = {
+          streak: newStreak,
+          pokeballsEarned,
+          greatballsEarned,
+        };
 
-      return {
-        ok: true,
-        alreadyClaimed: false,
-        nextAvailableAt: new Date(now.getTime() + DAILY_COOLDOWN_MS),
-        streak: newStreak,
-        coinsEarned,
-        pokeballsEarned,
-        greatballsEarned,
-        newCoinsBalance: updatedTrainer.coins,
-      };
-    });
+        await tx.economyTransaction.create({
+          data: {
+            idempotencyKey,
+            userId: userMeta.userId,
+            type: 'DAILY_REWARD',
+            coinsDelta: coinsEarned,
+            metadata: meta,
+          },
+        });
+
+        return {
+          ok: true,
+          alreadyClaimed: false,
+          nextAvailableAt: new Date(now.getTime() + DAILY_COOLDOWN_MS),
+          streak: newStreak,
+          coinsEarned,
+          pokeballsEarned,
+          greatballsEarned,
+          newCoinsBalance: updatedTrainer.coins,
+        };
+      }),
+    );
   }
 }
 

@@ -17,7 +17,8 @@ function isRarityTier(value: string): value is RarityTier {
     value === 'uncommon' ||
     value === 'rare' ||
     value === 'super_rare' ||
-    value === 'legendary'
+    value === 'legendary' ||
+    value === 'mega'
   );
 }
 
@@ -89,7 +90,7 @@ export class LeaderboardService {
           released: false,
           OR: [
             { isShiny: true },
-            { rarity: { in: ['rare', 'super_rare', 'legendary'] } },
+            { rarity: { in: ['rare', 'super_rare', 'legendary', 'mega'] } },
           ],
         },
         orderBy: { caughtAt: 'desc' },

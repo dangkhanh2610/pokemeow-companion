@@ -17,6 +17,7 @@ import {
 import { BALL_CATALOG, getBallSpec } from '@/game/catalog/ball-catalog';
 import type {
   CommunityOverview,
+  CreatureFormType,
   CreatureSpecies,
   LeaderboardEntry,
   LeaderboardMetric,
@@ -48,7 +49,24 @@ const RARITY_FILTERS: readonly { readonly id: RarityTier | 'all'; readonly label
   { id: 'rare', label: 'Rare' },
   { id: 'super_rare', label: 'Super Rare' },
   { id: 'legendary', label: 'Legendary' },
+  { id: 'mega', label: 'Mega / Primal' },
 ];
+
+const FORM_FILTERS: readonly { readonly id: CreatureFormType | 'all'; readonly label: string }[] = [
+  { id: 'all', label: 'Mọi dạng' },
+  { id: 'base', label: 'Dạng gốc' },
+  { id: 'mega', label: 'Mega / Primal' },
+  { id: 'gmax', label: 'Gigantamax' },
+  { id: 'regional', label: 'Vùng miền' },
+  { id: 'special', label: 'Huyền thoại đặc biệt' },
+];
+
+const FORM_BADGE_LABELS: Readonly<Record<Exclude<CreatureFormType, 'base'>, string>> = {
+  mega: 'MEGA',
+  gmax: 'GMAX',
+  regional: 'REGIONAL',
+  special: 'SPECIAL',
+};
 
 export function CommunityPortalClient({
   initialOverview,
@@ -66,6 +84,8 @@ export function CommunityPortalClient({
 
   const [dexQuery, setDexQuery] = useState('');
   const [dexRarity, setDexRarity] = useState<RarityTier | 'all'>('all');
+  const [dexFormType, setDexFormType] = useState<CreatureFormType | 'all'>('all');
+  const [showShiny, setShowShiny] = useState(false);
   const [dexPage, setDexPage] = useState(1);
   const DEX_PAGE_SIZE = 24;
 
@@ -101,17 +121,21 @@ export function CommunityPortalClient({
       if (dexRarity !== 'all' && species.rarity !== dexRarity) {
         return false;
       }
+      if (dexFormType !== 'all' && species.formType !== dexFormType) {
+        return false;
+      }
       if (!q) {
         return true;
       }
       return (
         species.name.toLowerCase().includes(q) ||
         String(species.id) === q ||
+        String(species.dexNumber) === q ||
         species.slug.includes(q) ||
         species.types.some((t) => t.toLowerCase().includes(q))
       );
     });
-  }, [catalog, dexQuery, dexRarity]);
+  }, [catalog, dexQuery, dexRarity, dexFormType]);
 
   const dexTotalPages = Math.max(1, Math.ceil(filteredCatalog.length / DEX_PAGE_SIZE));
   const safeDexPage = Math.min(dexPage, dexTotalPages);
@@ -399,7 +423,7 @@ export function CommunityPortalClient({
               />
             </div>
 
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               {RARITY_FILTERS.map((filter) => (
                 <button
                   key={filter.id}
@@ -417,7 +441,41 @@ export function CommunityPortalClient({
                   {filter.label}
                 </button>
               ))}
+
+              <button
+                type="button"
+                onClick={() => setShowShiny((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  showShiny
+                    ? 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/70 shadow-sm shadow-amber-500/20'
+                    : 'bg-slate-900/70 text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {showShiny ? 'Đang xem Shiny ★' : 'Chế độ Shiny'}
+              </button>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-xs font-medium text-slate-400">Dạng tiến hóa:</span>
+            {FORM_FILTERS.map((form) => (
+              <button
+                key={form.id}
+                type="button"
+                onClick={() => {
+                  setDexFormType(form.id);
+                  setDexPage(1);
+                }}
+                className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                  dexFormType === form.id
+                    ? 'bg-indigo-500/25 text-indigo-200 ring-1 ring-indigo-500/60'
+                    : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {form.label}
+              </button>
+            ))}
           </div>
 
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5">
@@ -483,21 +541,38 @@ export function CommunityPortalClient({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {paginatedCatalog.map((species) => {
               const rarityMeta = rarityConfigs[species.rarity];
+              const spriteSrc = showShiny
+                ? species.shinyAnimatedSpriteUrl
+                : species.animatedSpriteUrl;
               return (
                 <div
                   key={species.id}
-                  className="flex flex-col justify-between rounded-xl border border-slate-800 bg-slate-900/65 p-4 transition hover:border-slate-700"
+                  className={`flex flex-col justify-between rounded-xl border p-4 transition ${
+                    showShiny
+                      ? 'border-amber-500/35 bg-slate-900/80 hover:border-amber-400/60'
+                      : 'border-slate-800 bg-slate-900/65 hover:border-slate-700'
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className="font-mono text-xs text-slate-500">
-                        #{String(species.id).padStart(4, '0')} • BST {species.baseStats.bst}
-                      </span>
-                      <h3 className="text-base font-bold text-white">{species.name}</h3>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-mono text-xs text-slate-500">
+                          #{String(species.dexNumber).padStart(4, '0')} • BST {species.baseStats.bst}
+                        </span>
+                        {species.formType !== 'base' && (
+                          <span className="rounded bg-indigo-500/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-indigo-200">
+                            {FORM_BADGE_LABELS[species.formType]}
+                          </span>
+                        )}
+                      </div>
+                      <h3 className="truncate text-base font-bold text-white">
+                        {showShiny && <span className="mr-1 text-amber-300">★</span>}
+                        {species.name}
+                      </h3>
                       <p className="text-xs text-slate-400">{species.types.join(' • ')}</p>
                     </div>
                     <span
-                      className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${rarityMeta.badgeCss}`}
+                      className={`shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-semibold ${rarityMeta.badgeCss}`}
                     >
                       {rarityMeta.label}
                     </span>
@@ -505,7 +580,7 @@ export function CommunityPortalClient({
 
                   <div className="my-3 flex h-24 items-center justify-center">
                     <Image
-                      src={species.animatedSpriteUrl}
+                      src={spriteSrc}
                       alt={species.name}
                       width={88}
                       height={88}
