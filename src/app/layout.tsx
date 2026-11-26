@@ -18,9 +18,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'PokéMeow Companion — Ball Optimizer & Session Tracker',
+  title: 'PokéVerse — Discord Pokémon RPG Community Portal',
   description:
-    'Công cụ tính toán xác suất bắt, tối ưu hóa PokéBall theo Expected Value (EV), tính toán câu cá (;f), theo dõi phiên chơi và đếm ngược cooldown thủ công cho PokéMeow.',
+    'Bot Discord Pokémon RPG cộng đồng phi lợi nhuận: săn bắt Pokémon, thu thập Shiny, bảng xếp hạng huấn luyện viên và Pokédex trực tuyến.',
 };
 
 interface RootLayoutProps {
@@ -34,7 +34,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
       suppressHydrationWarning
       className={`${beVietnamPro.variable} ${jetbrainsMono.variable}`}
     >
-      <body className="antialiased selection:bg-cyan-500/30 selection:text-cyan-100">
+      <body className="antialiased selection:bg-indigo-500/30 selection:text-indigo-100">
         {children}
       </body>
     </html>

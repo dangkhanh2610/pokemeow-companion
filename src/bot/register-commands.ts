@@ -1,28 +1,27 @@
 import { REST, Routes } from 'discord.js';
-import { COMMAND_DEFINITIONS } from './commands/definitions';
+import { SLASH_COMMANDS } from './commands/definitions';
 import { loadBotConfig } from './config';
 
 async function registerCommands(): Promise<void> {
   const config = loadBotConfig();
   const rest = new REST({ version: '10' }).setToken(config.token);
 
-  console.log(`Đang đăng ký ${COMMAND_DEFINITIONS.length} Slash Commands...`);
+  console.log(`Đang đăng ký ${SLASH_COMMANDS.length} slash commands cho ${config.botName}...`);
 
   if (config.guildId) {
     await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), {
-      body: COMMAND_DEFINITIONS,
+      body: [...SLASH_COMMANDS],
     });
-    console.log(`✅ Đã đăng ký Slash Commands cho server (Guild ID: ${config.guildId}).`);
-    return;
+    console.log(`Đã đăng ký thành công slash commands cho Guild ID: ${config.guildId}`);
+  } else {
+    await rest.put(Routes.applicationCommands(config.clientId), {
+      body: [...SLASH_COMMANDS],
+    });
+    console.log('Đã đăng ký thành công Global slash commands.');
   }
-
-  await rest.put(Routes.applicationCommands(config.clientId), {
-    body: COMMAND_DEFINITIONS,
-  });
-  console.log('✅ Đã đăng ký Slash Commands toàn cục (có thể mất vài phút để đồng bộ).');
 }
 
-void registerCommands().catch((error: unknown) => {
-  console.error('❌ Đăng ký Slash Commands thất bại:', error);
-  process.exitCode = 1;
+registerCommands().catch((err: unknown) => {
+  console.error('Lỗi đăng ký slash commands:', err);
+  process.exit(1);
 });

@@ -1,5 +1,5 @@
 {
-  "name": "pokemeow-companion",
+  "name": "pokeverse-rpg",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -8,10 +8,9 @@
     "start": "next start",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
-    "db:migrate-json": "tsx src/bot/scripts/migrate-json-to-db.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/domain/__tests__/optimizer.test.ts src/bot/__tests__/parser.test.ts",
+    "test": "tsx --test src/game/__tests__/*.test.ts",
     "bot:register": "tsx src/bot/register-commands.ts",
     "bot:dev": "tsx src/bot/index.ts"
   },

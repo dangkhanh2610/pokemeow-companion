@@ -1,13 +1,10 @@
-import { Client, Events, GatewayIntentBits, Partials } from 'discord.js';
+import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { loadBotConfig } from './config';
-import { handleSlashCommand } from './handlers/interaction-handler';
-import { PassiveHelperHandler } from './handlers/passive-helper-handler';
-import { createBotStore, isDatabaseConfigured } from './store/store-factory';
+import { BotCommandRouter } from './handlers/command-router';
 
-function main(): void {
+async function bootstrapBot(): Promise<void> {
   const config = loadBotConfig();
-  const store = createBotStore();
-  const passiveHelper = new PassiveHelperHandler(store, config);
+  const router = new BotCommandRouter(config.prefix, config.botName);
 
   const client = new Client({
     intents: [
@@ -15,45 +12,56 @@ function main(): void {
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
     ],
-    partials: [Partials.Message, Partials.Channel],
   });
 
   client.once(Events.ClientReady, (readyClient) => {
-    console.log(`🤖 PokéMeow Companion Bot đã trực tuyến: ${readyClient.user.tag}`);
-    console.log(`🎯 Đang theo dõi ID PokéMeow Bot: ${config.pokemeowBotId}`);
     console.log(
-      `💾 Chế độ lưu trữ: ${isDatabaseConfigured() ? 'PostgreSQL (Prisma — Đồng bộ Vercel)' : 'JSON cục bộ (data/bot-state.json)'}`,
+      `[${config.botName}] Đã kết nối Discord dưới tên ${readyClient.user.tag} (${readyClient.guilds.cache.size} servers).`,
     );
-    passiveHelper.startCatchbotPoller(readyClient);
+    console.log(`[${config.botName}] Sẵn sàng nhận Slash Commands (/) và Prefix (${config.prefix}).`);
   });
 
-  client.on(Events.InteractionCreate, (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-    void handleSlashCommand(interaction, store);
+  client.on(Events.InteractionCreate, async (interaction) => {
+    try {
+      if (interaction.isChatInputCommand()) {
+        await router.handleSlashCommand(interaction);
+      } else if (interaction.isButton()) {
+        await router.handleButtonInteraction(interaction);
+      }
+    } catch (error) {
+      console.error('Lỗi xử lý Interaction:', error);
+      if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+        await interaction
+          .reply({ content: '❌ Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.', ephemeral: true })
+          .catch(() => undefined);
+      }
+    }
   });
 
-  client.on(Events.MessageCreate, (message) => {
-    void passiveHelper.handleMessage(message);
+  client.on(Events.MessageCreate, async (message) => {
+    try {
+      await router.handlePrefixMessage(message);
+    } catch (error) {
+      console.error('Lỗi xử lý Prefix Message:', error);
+      await message
+        .reply('❌ Đã xảy ra lỗi khi xử lý lệnh. Vui lòng thử lại sau.')
+        .catch(() => undefined);
+    }
   });
 
-  client.on(Events.MessageUpdate, (_oldMessage, newMessage) => {
-    void passiveHelper.handleMessageUpdate(newMessage);
-  });
-
-  const shutdown = (): void => {
-    console.log('Đang tắt PokéMeow Companion Bot...');
-    passiveHelper.dispose();
-    void client.destroy();
+  const shutdown = (signal: string): void => {
+    console.log(`[${config.botName}] Nhận tín hiệu ${signal}, đang ngắt kết nối Discord...`);
+    client.destroy();
     process.exit(0);
   };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-  void client.login(config.token).catch((error: unknown) => {
-    console.error('❌ Đăng nhập Discord Bot thất bại:', error);
-    process.exit(1);
-  });
+  await client.login(config.token);
 }
 
-main();
+bootstrapBot().catch((error: unknown) => {
+  console.error('Không thể khởi động bot:', error);
+  process.exit(1);
+});

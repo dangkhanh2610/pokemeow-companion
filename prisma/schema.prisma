@@ -7,62 +7,89 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model UserProfile {
-  userId             String       @id
-  displayName        String       @default("")
-  avatarUrl          String       @default("")
-  buffsJson          Json
-  fishingSetupJson   Json
-  economyJson        Json
-  remindersEnabled   Boolean      @default(true)
-  catchbotReturnAtMs BigInt?
-  catchbotChannelId  String?
-  questsJson         Json         @default("[]")
-  updatedAt          DateTime     @updatedAt
-  logs               CatchLog[]
-  hallOfFameEntries  HallOfFame[]
+model Trainer {
+  userId          String               @id
+  username        String
+  displayName     String               @default("")
+  avatarUrl       String               @default("")
+  coins           Int                  @default(2500)
+  xp              Int                  @default(0)
+  level           Int                  @default(1)
+  totalCatches    Int                  @default(0)
+  totalEncounters Int                  @default(0)
+  shinyCatches    Int                  @default(0)
+  dailyStreak     Int                  @default(0)
+  lastDailyAt     DateTime?
+  lastWildAt      DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  inventory       InventoryItem[]
+  creatures       CaughtCreature[]
+  encounters      ActiveEncounter[]
+  transactions    EconomyTransaction[]
 }
 
-model CatchLog {
-  id          String      @id
+model InventoryItem {
+  id        String  @id @default(cuid())
+  userId    String
+  itemId    String
+  quantity  Int     @default(0)
+  trainer   Trainer @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@unique([userId, itemId])
+}
+
+model CaughtCreature {
+  id          String   @id @default(cuid())
   userId      String
-  timestamp   BigInt
-  source      String
-  rarityId    String
-  ballId      String
-  caught      Boolean
-  pokemonName String      @default("")
-  ballCost    Int
-  coinsEarned Int
-  netProfit   Int
-  user        UserProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  speciesId   Int
+  speciesName String
+  rarity      String
+  isShiny     Boolean  @default(false)
+  ivTotal     Int
+  ivPercent   Float
+  ivsJson     Json
+  level       Int      @default(1)
+  ballUsed    String
+  released    Boolean  @default(false)
+  caughtAt    DateTime @default(now())
+  trainer     Trainer  @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
-  @@index([userId, timestamp(sort: Desc)])
+  @@index([userId, released, caughtAt(sort: Desc)])
+  @@index([userId, speciesId, isShiny])
+  @@index([isShiny, rarity, caughtAt(sort: Desc)])
 }
 
-model ChannelSetting {
-  channelId    String  @id
-  enabled      Boolean @default(false)
-  autoCleanSec Int     @default(12)
-  onlyRarePlus Boolean @default(false)
+model ActiveEncounter {
+  id        String   @id @default(cuid())
+  userId    String
+  channelId String
+  speciesId Int
+  isShiny   Boolean  @default(false)
+  ivsJson   Json
+  status    String   @default("OPEN")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  trainer   Trainer  @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, status])
 }
 
-model GlobalSchedule {
-  key       String  @id
-  startAtMs BigInt?
-  channelId String?
-  warned5m  Boolean @default(false)
+model EconomyTransaction {
+  id             String   @id @default(cuid())
+  idempotencyKey String   @unique
+  userId         String
+  type           String
+  coinsDelta     Int
+  metadata       Json
+  createdAt      DateTime @default(now())
+  trainer        Trainer  @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
 }
 
-model HallOfFame {
-  id          String      @id
-  userId      String
-  displayName String      @default("")
-  pokemonName String
-  rarityId    String
-  ballId      String
-  timestamp   BigInt
-  user        UserProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
-
-  @@index([timestamp(sort: Desc)])
+model GuildConfig {
+  guildId   String   @id
+  prefix    String   @default(";")
+  updatedAt DateTime @updatedAt
 }
