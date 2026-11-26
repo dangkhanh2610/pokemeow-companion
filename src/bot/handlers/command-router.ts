@@ -36,6 +36,7 @@ import {
   buildMegaSuccessEmbed,
   buildPrefixEmbed,
   buildProfileEmbed,
+  buildPurchaseSuccessEmbed,
   buildReleaseEmbed,
   buildShopEmbed,
   buildThrowingEmbed,
@@ -198,6 +199,51 @@ export class BotCommandRouter {
       }
     }
     return null;
+  }
+
+  private async executePrefixBuy(
+    message: Message,
+    meta: TrainerIdentityInput,
+    serverPrefix: string,
+    rawItem: string | undefined,
+    rawQty: string | undefined,
+  ): Promise<void> {
+    if (!rawItem) {
+      await message.reply(
+        `💡 Cách dùng: \`${serverPrefix}s b <số_mục|mã> [số_lượng]\` — ví dụ: \`${serverPrefix}s b 1 10\` hoặc \`${serverPrefix}b pb 10\``,
+      );
+      return;
+    }
+    const ballId = resolveBallId(rawItem);
+    if (!ballId) {
+      await message.reply(
+        `❌ Không tìm thấy vật phẩm \`${rawItem}\`. Hỗ trợ mục \`1\`–\`5\` hoặc mã \`pb\`, \`gb\`, \`ub\`, \`prb\`, \`mb\`.`,
+      );
+      return;
+    }
+    const quantity = rawQty ? Number.parseInt(rawQty, 10) : 1;
+    const bought = await economyService.buyBall(
+      meta,
+      ballId,
+      Number.isNaN(quantity) ? 0 : quantity,
+      `msg-buy:${message.id}`,
+    );
+    if (!bought.ok) {
+      await message.reply(`❌ ${bought.message}`);
+      return;
+    }
+    await message.reply({
+      embeds: [
+        buildPurchaseSuccessEmbed(
+          meta.displayName,
+          bought.ballId,
+          bought.quantityBought,
+          bought.totalCost,
+          bought.newBallQuantity,
+          bought.newCoinsBalance,
+        ),
+      ],
+    });
   }
 
   public async handleSlashCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -402,9 +448,18 @@ export class BotCommandRouter {
           await interaction.editReply(`❌ ${bought.message}`);
           return;
         }
-        await interaction.editReply(
-          `✅ Đã mua **${bought.quantityBought}x ${bought.ballId}** với giá **${bought.totalCost.toLocaleString('en-US')} PC**. Hiện có: **${bought.newBallQuantity}** quả • Số dư: **${bought.newCoinsBalance.toLocaleString('en-US')} PC**.`,
-        );
+        await interaction.editReply({
+          embeds: [
+            buildPurchaseSuccessEmbed(
+              meta.displayName,
+              bought.ballId,
+              bought.quantityBought,
+              bought.totalCost,
+              bought.newBallQuantity,
+              bought.newCoinsBalance,
+            ),
+          ],
+        });
         return;
       }
 
@@ -678,43 +733,25 @@ export class BotCommandRouter {
         return;
       }
 
+      case 's':
       case 'shop': {
+        const sub = arg1?.toLowerCase();
+        if (sub === 'b' || sub === 'buy') {
+          await this.executePrefixBuy(message, meta, settings.prefix, arg2, parts[3]);
+          return;
+        }
         await message.reply({ embeds: [buildShopEmbed(settings.prefix)] });
         return;
       }
 
-      case 'buy':
-      case 'b': {
-        if (!arg1) {
-          await message.reply(
-            `💡 Cách dùng: \`${settings.prefix}buy <pb|gb|ub|prb|mb> [số_lượng]\` — ví dụ: \`${settings.prefix}buy pb 10\``,
-          );
-          return;
-        }
-        const ballId = resolveBallId(arg1);
-        if (!ballId) {
-          await message.reply(
-            `❌ Không tìm thấy bóng \`${arg1}\`. Hỗ trợ: \`pb\`, \`gb\`, \`ub\`, \`prb\`, \`mb\`.`,
-          );
-          return;
-        }
-        const quantity = arg2 ? Number.parseInt(arg2, 10) : 1;
-        const bought = await economyService.buyBall(
-          meta,
-          ballId,
-          Number.isNaN(quantity) ? 0 : quantity,
-          `msg-buy:${message.id}`,
-        );
-        if (!bought.ok) {
-          await message.reply(`❌ ${bought.message}`);
-          return;
-        }
-        await message.reply(
-          `✅ Đã mua **${bought.quantityBought}x ${bought.ballId}** (**-${bought.totalCost.toLocaleString('en-US')} PC**). Hiện có: **${bought.newBallQuantity}** quả • Số dư: **${bought.newCoinsBalance.toLocaleString('en-US')} PC**.`,
-        );
+      case 'b':
+      case 'buy': {
+        await this.executePrefixBuy(message, meta, settings.prefix, arg1, arg2);
         return;
       }
 
+      case 'i':
+      case 'inv':
       case 'bag': {
         await trainerService.ensureTrainer(meta);
         const profile = await trainerService.getTrainerProfile(meta.userId);
@@ -725,6 +762,7 @@ export class BotCommandRouter {
         return;
       }
 
+      case 'd':
       case 'dex':
       case 'pokedex': {
         await trainerService.ensureTrainer(meta);
@@ -751,6 +789,7 @@ export class BotCommandRouter {
         return;
       }
 
+      case 'f':
       case 'fav':
       case 'favorite': {
         const target = parts.slice(1).join(' ') || undefined;
@@ -769,6 +808,7 @@ export class BotCommandRouter {
         return;
       }
 
+      case 'm':
       case 'mega': {
         const query = parts.slice(1).join(' ').trim();
         if (!query) {
@@ -791,6 +831,7 @@ export class BotCommandRouter {
         return;
       }
 
+      case 'pf':
       case 'profile':
       case 'stats': {
         await trainerService.ensureTrainer(meta);
@@ -802,12 +843,15 @@ export class BotCommandRouter {
         return;
       }
 
+      case 'r':
+      case 'rel':
       case 'release': {
         const res = await economyService.releaseDuplicates(meta, `msg-rel:${message.id}`);
         await message.reply({ embeds: [buildReleaseEmbed(meta.displayName, res)] });
         return;
       }
 
+      case 'dl':
       case 'daily': {
         const res = await trainerService.claimDaily(meta, `msg-daily:${message.id}`);
         await message.reply({ embeds: [buildDailyEmbed(meta.displayName, res)] });
@@ -815,6 +859,7 @@ export class BotCommandRouter {
       }
 
       case 'lb':
+      case 'top':
       case 'leaderboard': {
         const metric = parseMetric(arg1);
         const entries = await leaderboardService.getLeaderboard(metric, 10);

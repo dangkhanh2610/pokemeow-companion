@@ -28,12 +28,12 @@ const FAN_DISCLAIMER =
   'PokeNyan · Fan-made phi lợi nhuận, không liên kết với Nintendo / The Pokémon Company';
 
 const RARITY_LABELS: Readonly<Record<RarityTier, string>> = {
-  common: 'COMMON',
-  uncommon: 'UNCOMMON',
-  rare: 'RARE',
-  super_rare: 'SUPER RARE',
-  legendary: 'LEGENDARY',
-  mega: 'MEGA',
+  common: 'Common',
+  uncommon: 'Uncommon',
+  rare: 'Rare',
+  super_rare: 'Super Rare',
+  legendary: 'Legendary',
+  mega: 'Mega / Primal',
 };
 
 const BALL_SHORT_LABELS: Readonly<Record<BallId, string>> = {
@@ -52,8 +52,28 @@ function formatDexNo(id: number): string {
   return `#${String(id).padStart(4, '0')}`;
 }
 
-function formatTypeTags(types: readonly string[]): string {
-  return types.map((t) => `\`${t.toUpperCase()}\``).join(' ');
+function formatTypeBadges(types: readonly string[]): string {
+  return types
+    .map((typeName) => {
+      const icon = botEmojiRegistry.getTypeMention(typeName);
+      return icon ? `${icon} **${typeName}**` : `\`${typeName.toUpperCase()}\``;
+    })
+    .join('  ·  ');
+}
+
+function formatRarityBadge(rarity: RarityTier, isShiny = false): string {
+  const rarityIcon = botEmojiRegistry.getRarityMention(rarity);
+  const label = RARITY_LABELS[rarity];
+  const base = rarityIcon ? `${rarityIcon} **${label}**` : `\`${label.toUpperCase()}\``;
+  if (!isShiny) {
+    return base;
+  }
+  const shinyIcon = botEmojiRegistry.getShinyMention();
+  return `${base}  ·  ${shinyIcon} **Shiny**`;
+}
+
+function ansiBanner(ansiLine: string): string {
+  return `\`\`\`ansi\n${ansiLine}\n\`\`\``;
 }
 
 function buildIvProgressBar(ivPercent: number): string {
@@ -117,9 +137,7 @@ export function buildWildEncounterEmbed(
     ? roll.species.shinyAnimatedSpriteUrl
     : roll.species.animatedSpriteUrl;
   const expireEpoch = Math.floor(expiresAt.getTime() / 1000);
-  const shinyPrefix = roll.isShiny ? '★ SHINY · ' : '';
-  const rarityTag = `\`${RARITY_LABELS[roll.species.rarity]}\``;
-  const shinyTag = roll.isShiny ? ' `SHINY`' : '';
+  const shinyPrefix = roll.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
   const baseCatchPct = Math.round(roll.species.baseCatchRate * 100);
   const rescueLine = rescueGranted
     ? `\n${botEmojiRegistry.getBallMention('pokeball')} **Tiếp tế khẩn cấp:** +3 Poké Ball miễn phí vì bạn đã cạn túi!`
@@ -133,7 +151,10 @@ export function buildWildEncounterEmbed(
     })
     .setTitle(`${shinyPrefix}${formatDexNo(roll.species.dexNumber)}  ${roll.species.name}`)
     .setDescription(
-      `${rarityTag}${shinyTag}  ${formatTypeTags(roll.species.types)}\nBỏ chạy <t:${expireEpoch}:R>${rescueLine}`,
+      [
+        `${formatRarityBadge(roll.species.rarity, roll.isShiny)}  |  ${formatTypeBadges(roll.species.types)}`,
+        `Bỏ chạy <t:${expireEpoch}:R>${rescueLine}`,
+      ].join('\n'),
     )
     .addFields(
       {
@@ -156,17 +177,20 @@ export function buildExpiredEncounterEmbed(
   species: CreatureSpecies,
   isShiny: boolean,
 ): EmbedBuilder {
-  const shinyPrefix = isShiny ? '★ SHINY · ' : '';
+  const shinyPrefix = isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
   const spriteUrl = isShiny ? species.shinyAnimatedSpriteUrl : species.animatedSpriteUrl;
 
   return new EmbedBuilder()
     .setColor(0x475569)
     .setTitle(`${shinyPrefix}${formatDexNo(species.dexNumber)}  ${species.name}`)
     .setDescription(
-      `Đã hết thời gian chờ — Pokémon hoang dã của **${trainerDisplayName}** đã bỏ đi.`,
+      [
+        ansiBanner(`\u001b[1;30m⏱  HẾT GIỜ  ·  ${species.name.toUpperCase()} ĐÃ BỎ ĐI\u001b[0m`),
+        `Pokémon hoang dã của **${trainerDisplayName}** đã rời đi trước khi bạn kịp ném bóng.`,
+      ].join('\n'),
     )
     .setThumbnail(spriteUrl)
-    .setFooter({ text: 'PokeNyan  ·  Gõ /p hoặc lệnh tìm mới để tiếp tục' });
+    .setFooter({ text: 'PokeNyan  ·  Gõ ;p hoặc /p để tiếp tục tìm kiếm' });
 }
 
 export function buildThrowingEmbed(
@@ -178,7 +202,7 @@ export function buildThrowingEmbed(
   const ball = getBallSpec(ballId);
   const shakeMention = botEmojiRegistry.getBallShakeMention(ballId);
   const shakeGifUrl = botEmojiRegistry.getBallShakeGifUrl(ballId);
-  const shinyPrefix = isShiny ? '★ SHINY · ' : '';
+  const shinyPrefix = isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
   const spriteUrl = isShiny ? species.shinyAnimatedSpriteUrl : species.animatedSpriteUrl;
 
   const embed = new EmbedBuilder()
@@ -191,7 +215,7 @@ export function buildThrowingEmbed(
     .setDescription(
       [
         `${shakeMention} **${trainerDisplayName}** đã ném **${ball.name}**!`,
-        'Quả bóng đang rung lắc dữ dội... Chờ xem kết quả!',
+        ansiBanner(`\u001b[1;33m●  QUẢ BÓNG ĐANG RUNG LẮC DỮ DỘI...\u001b[0m`),
       ].join('\n'),
     )
     .setThumbnail(spriteUrl)
@@ -212,13 +236,20 @@ export function buildCatchResultEmbed(
   const spriteUrl = outcome.isShiny
     ? outcome.species.shinyAnimatedSpriteUrl
     : outcome.species.animatedSpriteUrl;
-  const shinyPrefix = outcome.isShiny ? '★ SHINY · ' : '';
+  const shinyPrefix = outcome.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
   const chancePct = (outcome.catchChance * 100).toFixed(1);
 
   if (outcome.caught) {
     const levelLine = outcome.leveledUp
       ? `  ·  **LEVEL UP → Lv.${outcome.newLevel}**`
       : '';
+    const highlightLine = outcome.isShiny
+      ? ansiBanner(
+          `\u001b[1;33m★  BẮT THÀNH CÔNG SHINY  ·  ${outcome.species.name.toUpperCase()}!\u001b[0m`,
+        )
+      : ansiBanner(
+          `\u001b[1;32m✔  BẮT THÀNH CÔNG  ·  ${outcome.species.name.toUpperCase()}!\u001b[0m`,
+        );
 
     const embed = new EmbedBuilder()
       .setColor(outcome.isShiny ? 0xfacc15 : 0x10b981)
@@ -228,7 +259,11 @@ export function buildCatchResultEmbed(
       })
       .setTitle(`${shinyPrefix}${formatDexNo(outcome.species.dexNumber)}  ${outcome.species.name}`)
       .setDescription(
-        `${ballMention} **${trainerDisplayName}** đã thu phục thành công!${levelLine}\n\`${RARITY_LABELS[outcome.species.rarity]}\`  ${formatTypeTags(outcome.species.types)}`,
+        [
+          highlightLine,
+          `${ballMention} **${trainerDisplayName}** đã thu phục thành công!${levelLine}`,
+          `${formatRarityBadge(outcome.species.rarity, outcome.isShiny)}  |  ${formatTypeBadges(outcome.species.types)}`,
+        ].join('\n'),
       )
       .addFields(
         {
@@ -261,31 +296,83 @@ export function buildCatchResultEmbed(
   return new EmbedBuilder()
     .setColor(0xef4444)
     .setAuthor({
-      name: `Đã bỏ chạy  ·  ${ball.name}`,
+      name: `Bắt hụt  ·  ${ball.name}`,
       iconURL: ball.iconUrl,
     })
     .setTitle(`${shinyPrefix}${formatDexNo(outcome.species.dexNumber)}  ${outcome.species.name}`)
     .setDescription(
-      `**${trainerDisplayName}** đã ném ${ballMention} **${ball.name}** (tỉ lệ **${chancePct}%**) nhưng Pokémon đã thoát ra ngoài.`,
+      [
+        ansiBanner(
+          `\u001b[1;31m✖  BẮT HỤT  ·  ${outcome.species.name.toUpperCase()} ĐÃ CHẠY THOÁT!\u001b[0m`,
+        ),
+        `${ballMention} **${trainerDisplayName}** đã ném **${ball.name}** (tỉ lệ **${chancePct}%**) nhưng Pokémon đã vùng thoát ra ngoài.`,
+      ].join('\n'),
     )
     .setThumbnail(spriteUrl)
-    .setFooter({ text: 'PokeNyan  ·  Gõ /p để tiếp tục tìm kiếm' });
+    .setFooter({ text: 'PokeNyan  ·  Gõ ;p hoặc /p để tiếp tục tìm kiếm' });
 }
 
 export function buildShopEmbed(prefix: string): EmbedBuilder {
-  const lines = BALL_CATALOG.map((ball) => {
+  const formatShopLine = (ball: (typeof BALL_CATALOG)[number]): string => {
     const icon = botEmojiRegistry.getBallMention(ball.id);
-    return `${icon} **${ball.name}** (\`${ball.shortCode}\`) — **${formatNumber(ball.price)} PC**\n└ ${ball.description}`;
-  });
+    const multText = ball.id === 'masterball' ? '100%' : `${ball.multiplier}x`;
+    return `\`[${ball.shopIndex}]\` ${icon} **${ball.name}** (\`${ball.shortCode}\`) — **${formatNumber(ball.price)} PC** · \`${multText}\`\n└ ${ball.description}`;
+  };
+
+  const standardLines = BALL_CATALOG.filter((b) => b.category === 'standard').map(formatShopLine);
+  const specialLines = BALL_CATALOG.filter((b) => b.category === 'special').map(formatShopLine);
 
   return new EmbedBuilder()
     .setColor(0x6366f1)
-    .setTitle('Cửa Hàng PokeNyan')
+    .setTitle('Cửa Hàng PokeNyan  ·  Danh Mục Vật Phẩm')
+    .setDescription(
+      `Gõ \`${prefix}s b <mục> [số_lượng]\` hoặc \`${prefix}b <mục|mã> [số_lượng]\` để mua nhanh:`,
+    )
+    .addFields(
+      {
+        name: 'Mục 1 · Bóng Cơ Bản ([1] – [3])',
+        value: standardLines.join('\n'),
+        inline: false,
+      },
+      {
+        name: 'Mục 2 · Bóng Hiếm & Tối Thượng ([4] – [5])',
+        value: specialLines.join('\n'),
+        inline: false,
+      },
+      {
+        name: 'Ví Dụ Mua Nhanh',
+        value: [
+          `• \`${prefix}s b 1 10\` → Mua 10 **Poké Ball**`,
+          `• \`${prefix}s b 3 5\` → Mua 5 **Ultra Ball**`,
+          `• \`${prefix}s b 5 1\` hoặc \`/buy\` → Mua 1 **Master Ball**`,
+        ].join('\n'),
+        inline: false,
+      },
+    )
+    .setFooter({ text: `PokeNyan  ·  Cửa hàng vật phẩm` });
+}
+
+export function buildPurchaseSuccessEmbed(
+  trainerDisplayName: string,
+  ballId: BallId,
+  quantityBought: number,
+  totalCost: number,
+  newBallQuantity: number,
+  newCoinsBalance: number,
+): EmbedBuilder {
+  const ball = getBallSpec(ballId);
+  const ballMention = botEmojiRegistry.getBallMention(ballId);
+
+  return new EmbedBuilder()
+    .setColor(0x10b981)
+    .setAuthor({ name: `Giao dịch thành công · ${trainerDisplayName}`, iconURL: ball.iconUrl })
     .setDescription(
       [
-        ...lines,
-        '',
-        `Cách mua: \`/buy ball:pokeball quantity:10\` hoặc \`${prefix}buy pb 10\``,
+        ansiBanner(
+          `\u001b[1;32m✔  ĐÃ MUA ${quantityBought}x ${ball.name.toUpperCase()}  (-${formatNumber(totalCost)} PC)\u001b[0m`,
+        ),
+        `${ballMention} **${ball.name}** (\`[${ball.shopIndex}]\` / \`${ball.shortCode}\`): hiện có **${newBallQuantity}** quả`,
+        `Số dư còn lại: **${formatNumber(newCoinsBalance)} PC**`,
       ].join('\n'),
     )
     .setFooter({ text: 'PokeNyan  ·  Cửa hàng vật phẩm' });
@@ -294,7 +381,7 @@ export function buildShopEmbed(prefix: string): EmbedBuilder {
 export function buildBagEmbed(summary: TrainerBagSummary): EmbedBuilder {
   const ballLines = BALL_CATALOG.map((ball) => {
     const icon = botEmojiRegistry.getBallMention(ball.id);
-    return `${icon} **${ball.name}** (\`${ball.shortCode}\`): **${summary.balls[ball.id]}**`;
+    return `\`[${ball.shopIndex}]\` ${icon} **${ball.name}** (\`${ball.shortCode}\`): **${summary.balls[ball.id]}**`;
   });
 
   return new EmbedBuilder()
@@ -323,10 +410,19 @@ export function buildProfileEmbed(summary: TrainerBagSummary): EmbedBuilder {
   const topLines =
     summary.topCreatures.length > 0
       ? summary.topCreatures.map((c, idx) => {
-          const shiny = c.isShiny ? '★ ' : '';
-          return `\`#${idx + 1}\` ${shiny}**${c.speciesName}** (\`${c.rarity.toUpperCase()}\`) — **${c.ivPercent}% IV**`;
+          const shiny = c.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
+          const rarIcon =
+            c.rarity === 'common' ||
+            c.rarity === 'uncommon' ||
+            c.rarity === 'rare' ||
+            c.rarity === 'super_rare' ||
+            c.rarity === 'legendary' ||
+            c.rarity === 'mega'
+              ? `${botEmojiRegistry.getRarityMention(c.rarity)} `
+              : '';
+          return `\`#${idx + 1}\` ${rarIcon}${shiny}**${c.speciesName}** — **${c.ivPercent}% IV**`;
         })
-      : ['Chưa bắt được Pokémon nào. Hãy dùng `/p` ngay!'];
+      : ['Chưa bắt được Pokémon nào. Hãy dùng `;p` hoặc `/p` ngay!'];
 
   return new EmbedBuilder()
     .setColor(0x8b5cf6)
@@ -366,15 +462,26 @@ export function buildDexEmbed(
     dex.items.length > 0
       ? dex.items.map((item, index) => {
           const globalIndex = (dex.page - 1) * 10 + index + 1;
-          const shiny = item.isShiny ? '★ ' : '';
+          const species = defaultCreatureCatalog.getById(item.speciesId);
+          const dexNo = species?.dexNumber ?? item.speciesId;
+          const shiny = item.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
           const fav = item.isFavorite ? '♥ ' : '';
+          const rarIcon =
+            item.rarity === 'common' ||
+            item.rarity === 'uncommon' ||
+            item.rarity === 'rare' ||
+            item.rarity === 'super_rare' ||
+            item.rarity === 'legendary' ||
+            item.rarity === 'mega'
+              ? `${botEmojiRegistry.getRarityMention(item.rarity)} `
+              : '';
           const shortId = item.id.slice(-6);
-          return `\`${globalIndex}.\` ${fav}${shiny}**${item.speciesName}** \`${formatDexNo(item.speciesId)}\` — \`${item.rarity.toUpperCase()}\` · **${item.ivPercent}% IV** · \`#${shortId}\``;
+          return `\`${globalIndex}.\` ${fav}${rarIcon}${shiny}**${item.speciesName}** \`${formatDexNo(dexNo)}\` — **${item.ivPercent}% IV** · \`#${shortId}\``;
         })
       : [
           dex.filter
             ? `Không có Pokémon nào khớp bộ lọc \`${dex.filter}\`.`
-            : 'Kho Pokémon của bạn đang trống. Dùng `/p` để bắt Pokémon đầu tiên!',
+            : 'Kho Pokémon của bạn đang trống. Dùng `;p` hoặc `/p` để bắt Pokémon đầu tiên!',
         ];
 
   return new EmbedBuilder()
@@ -382,7 +489,7 @@ export function buildDexEmbed(
     .setTitle(`Pokédex · ${trainerDisplayName}${filterBadge}`)
     .setDescription(lines.join('\n'))
     .setFooter({
-      text: `Trang ${dex.page}/${dex.totalPages}  ·  ${dex.totalCount} Pokémon  ·  Dùng /fav <#mã> để khóa yêu thích`,
+      text: `Trang ${dex.page}/${dex.totalPages}  ·  ${dex.totalCount} Pokémon  ·  Dùng ;f <#mã> để khóa yêu thích`,
     });
 }
 
@@ -413,9 +520,8 @@ export function buildDailyEmbed(
     .setTitle('Điểm Danh Hàng Ngày Thành Công')
     .setDescription(
       [
+        ansiBanner(`\u001b[1;32m✔  ĐIỂM DANH NGÀY ${result.streak}  (+${formatNumber(result.coinsEarned)} PC)\u001b[0m`),
         `Huấn luyện viên: **${trainerDisplayName}**`,
-        `Chuỗi điểm danh: **${result.streak} ngày**`,
-        `Nhận: **+${formatNumber(result.coinsEarned)} PC**`,
         `${pbIcon} Poké Ball **+${result.pokeballsEarned}**  ·  ${gbIcon} Great Ball **+${result.greatballsEarned}**`,
         `Số dư hiện tại: **${formatNumber(result.newCoinsBalance)} PC**`,
       ].join('\n'),
@@ -432,7 +538,7 @@ export function buildReleaseEmbed(
       .setColor(0x64748b)
       .setTitle('Không có Pokémon trùng để thả')
       .setDescription(
-        `${trainerDisplayName} hiện không có Pokémon trùng nào (hệ thống luôn giữ IV cao nhất mỗi loài, toàn bộ **Shiny**, **Legendary** và Pokémon đã gắn **♥ Yêu thích**).`,
+        `${trainerDisplayName} hiện không có Pokémon trùng nào (hệ thống luôn giữ IV cao nhất mỗi loài, toàn bộ **Shiny**, **Legendary**, **Mega** và Pokémon đã gắn **♥ Yêu thích**).`,
       )
       .setFooter({ text: 'PokeNyan  ·  Quản lý bộ sưu tập' });
   }
@@ -442,9 +548,8 @@ export function buildReleaseEmbed(
     .setTitle('Đã Thả Pokémon Trùng Thành Công')
     .setDescription(
       [
-        `Huấn luyện viên: **${trainerDisplayName}**`,
-        `Số Pokémon đã thả: **${result.releasedCount}** (giữ IV cao nhất, Shiny, Legendary & Yêu thích)`,
-        `Tiền thưởng thu về: **+${formatNumber(result.coinsEarned)} PC**`,
+        ansiBanner(`\u001b[1;32m✔  ĐÃ THẢ ${result.releasedCount} POKÉMON TRÙNG  (+${formatNumber(result.coinsEarned)} PC)\u001b[0m`),
+        `Huấn luyện viên: **${trainerDisplayName}** (giữ IV cao nhất, Shiny, Legendary, Mega & Yêu thích)`,
         `Số dư mới: **${formatNumber(result.newCoinsBalance)} PC**`,
       ].join('\n'),
     )
@@ -480,27 +585,27 @@ export function buildLeaderboardEmbed(
 export function buildHelpEmbed(prefix: string, botName: string): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(0x6366f1)
-    .setTitle(`Hướng Dẫn Chơi · ${botName}`)
+    .setTitle(`Hướng Dẫn Lệnh · ${botName}`)
     .setDescription(
       [
-        `Hỗ trợ **Slash Commands** (\`/\`), **Prefix** (\`${prefix}\`) hoặc **Mention** (\`@${botName} p\`):`,
+        `Hỗ trợ **Slash Commands** (\`/\`), **Prefix** (\`${prefix}\`), lệnh viết tắt kiểu PokéMeow hoặc **Mention** (\`@${botName} p\`):`,
         '',
-        `• \`/p\` hoặc \`${prefix}p\` — Tìm và bắt Pokémon hoang dã`,
-        `• \`/shop\` hoặc \`${prefix}shop\` — Xem cửa hàng Poké Ball`,
-        `• \`/buy\` hoặc \`${prefix}buy pb 10\` — Mua bóng (\`pb\`, \`gb\`, \`ub\`, \`prb\`, \`mb\`)`,
-        `• \`/bag\` hoặc \`${prefix}bag\` — Xem túi đồ và số dư PokéCoins`,
-        `• \`/dex [page] [filter]\` hoặc \`${prefix}dex shiny\` — Xem & lọc Pokédex`,
-        `• \`/fav [tên|#mã]\` hoặc \`${prefix}fav\` — Khóa/mở khóa Pokémon yêu thích`,
-        `• \`/mega [tên]\` hoặc \`${prefix}mega rayquaza\` — Thức tỉnh Mega (cần 6 Legend, hiến tế 5)`,
-        `• \`/profile\` hoặc \`${prefix}profile\` — Xem hồ sơ huấn luyện viên`,
-        `• \`/release\` hoặc \`${prefix}release\` — Thả Pokémon trùng để kiếm thêm PC`,
-        `• \`/daily\` hoặc \`${prefix}daily\` — Nhận thưởng điểm danh mỗi 24 giờ`,
-        `• \`/lb\` hoặc \`${prefix}lb [catches|coins|shinies|level]\` — Xem bảng xếp hạng`,
+        `• \`${prefix}p\` / \`/p\` — Tìm & bắt Pokémon hoang dã`,
+        `• \`${prefix}s\` / \`/shop\` — Xem cửa hàng phân mục đánh số \`[1]\`–\`[5]\``,
+        `• \`${prefix}s b 1 10\` / \`${prefix}b pb 10\` / \`/buy\` — Mua nhanh theo số mục hoặc mã bóng`,
+        `• \`${prefix}i\` / \`/bag\` — Xem túi đồ & số dư PokéCoins`,
+        `• \`${prefix}d [shiny|mega|fav|tên]\` / \`/dex\` — Xem & lọc Pokédex`,
+        `• \`${prefix}f [tên|#mã]\` / \`/fav\` — Khóa/mở khóa Pokémon yêu thích`,
+        `• \`${prefix}pf\` / \`/profile\` — Xem hồ sơ huấn luyện viên`,
+        `• \`${prefix}r\` / \`${prefix}r d\` / \`/release\` — Thả Pokémon trùng kiếm PC`,
+        `• \`${prefix}dl\` / \`/daily\` — Điểm danh nhận thưởng mỗi 24 giờ`,
+        `• \`${prefix}m [tên]\` / \`/mega\` — Nghi thức hiến tế 5/6 Legend lên Mega`,
+        `• \`${prefix}lb\` / \`/lb\` — Xem bảng xếp hạng cộng đồng`,
         '',
         '**Lệnh Quản Trị Viên (Admin / Manage Server)**',
-        `• \`/bot <on|off|status>\` hoặc \`${prefix}bot <on|off|status>\` — Bật/tắt bot trong server`,
-        `• \`/prefix [ký_tự]\` hoặc \`${prefix}prefix n!\` — Đổi prefix riêng để tránh trùng bot khác`,
-        `• \`/channel <allow|block|list|reset>\` hoặc \`${prefix}channel allow\` — Giới hạn kênh bot`,
+        `• \`${prefix}bot <on|off|status>\` / \`/bot\` — Bật/tắt bot trong server`,
+        `• \`${prefix}prefix [ký_tự]\` / \`/prefix\` — Đổi prefix riêng để tránh trùng bot khác`,
+        `• \`${prefix}channel <allow|block|list|reset>\` / \`/channel\` — Giới hạn kênh bot`,
         '',
         `*${FAN_DISCLAIMER}. Chỉ nhận ủng hộ tự nguyện để duy trì server.*`,
       ].join('\n'),
@@ -558,7 +663,7 @@ export function buildPrefixEmbed(
     .setDescription(
       [
         `${header}: \`${prefix}\``,
-        `Ví dụ dùng lệnh: \`${prefix}p\`, \`${prefix}shop\`, \`${prefix}dex shiny\`, hoặc tag \`@${botName} p\`.`,
+        `Ví dụ dùng lệnh: \`${prefix}p\`, \`${prefix}s b 1 10\`, \`${prefix}d shiny\`, hoặc tag \`@${botName} p\`.`,
       ].join('\n'),
     )
     .setFooter({ text: `${botName}  ·  Cấu hình server` });
@@ -613,8 +718,8 @@ export function buildMegaOverviewEmbed(
       ? progress.availableMegas
           .slice(0, 12)
           .map((m) => {
-            const shiny = m.baseIsShiny ? '★ ' : '';
-            return `• **${m.megaSpecies.name}** (${shiny}${m.baseBestIv}% IV gốc) — \`${prefix}mega ${m.megaSpecies.name.toLowerCase()}\``;
+            const shiny = m.baseIsShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
+            return `• **${m.megaSpecies.name}** (${shiny}${m.baseBestIv}% IV gốc) — \`${prefix}m ${m.megaSpecies.name.toLowerCase()}\``;
           })
           .join('\n') +
         (progress.availableMegas.length > 12
@@ -626,24 +731,27 @@ export function buildMegaOverviewEmbed(
     progress.totalLegendaries >= MEGA_REQUIRED_LEGENDARIES &&
     progress.sacrificableLegendaries >= MEGA_SACRIFICE_COUNT;
 
+  const legendIcon = botEmojiRegistry.getRarityMention('legendary');
+  const megaIcon = botEmojiRegistry.getRarityMention('mega');
+
   return new EmbedBuilder()
     .setColor(0xf43f5e)
     .setTitle(`Nghi Thức Thức Tỉnh Mega · ${trainerDisplayName}`)
     .setDescription(
       [
         `Mega / Primal **không xuất hiện ngoài tự nhiên** (\`${prefix}p\`), mà phải thức tỉnh từ dạng gốc.`,
-        `**Điều kiện:** Sở hữu Pokémon gốc + đủ **${MEGA_REQUIRED_LEGENDARIES} Legendary**, hiến tế **${MEGA_SACRIFICE_COUNT} con IV thấp nhất** (tự động chừa lại Shiny và Pokémon khóa \`/fav\`).`,
+        `**Điều kiện:** Sở hữu Pokémon gốc + đủ **${MEGA_REQUIRED_LEGENDARIES} Legendary**, hiến tế **${MEGA_SACRIFICE_COUNT} con IV thấp nhất** (chừa lại Shiny và Pokémon khóa \`${prefix}f\`).`,
       ].join('\n'),
     )
     .addFields(
       {
         name: 'Tiến Độ Legendary',
-        value: `Đang có: **${progress.totalLegendaries} / ${MEGA_REQUIRED_LEGENDARIES}**\nHợp lệ hiến tế: **${progress.sacrificableLegendaries} / ${MEGA_SACRIFICE_COUNT}**`,
+        value: `${legendIcon ? `${legendIcon} ` : ''}Đang có: **${progress.totalLegendaries} / ${MEGA_REQUIRED_LEGENDARIES}**\nHợp lệ hiến tế: **${progress.sacrificableLegendaries} / ${MEGA_SACRIFICE_COUNT}**`,
         inline: true,
       },
       {
         name: 'Sở Hữu Mega',
-        value: `**${progress.ownedMegaCount}** Mega / Primal\nTrạng thái: ${conditionMet ? '`SẴN SÀNG`' : '`CHƯA ĐỦ ĐIỀU KIỆN`'}`,
+        value: `${megaIcon ? `${megaIcon} ` : ''}**${progress.ownedMegaCount}** Mega / Primal\nTrạng thái: ${conditionMet ? '`SẴN SÀNG`' : '`CHƯA ĐỦ ĐIỀU KIỆN`'}`,
         inline: true,
       },
       {
@@ -652,14 +760,14 @@ export function buildMegaOverviewEmbed(
         inline: false,
       },
     )
-    .setFooter({ text: 'PokeNyan  ·  Dùng /mega <tên> để xem trước & xác nhận hiến tế' });
+    .setFooter({ text: `PokeNyan  ·  Dùng ${prefix}m <tên> hoặc /mega để thức tỉnh` });
 }
 
 export function buildMegaConfirmEmbed(
   trainerDisplayName: string,
   preview: Extract<MegaPreviewOutcome, { readonly ok: true }>,
 ): EmbedBuilder {
-  const shinyTag = preview.baseCreature.isShiny ? '★ SHINY · ' : '';
+  const shinyTag = preview.baseCreature.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
   const sacrificeLines = preview.sacrificeList
     .map(
       (c, idx) =>
@@ -675,16 +783,13 @@ export function buildMegaConfirmEmbed(
     .setColor(0xf43f5e)
     .setTitle(`Xác Nhận Thức Tỉnh · ${shinyTag}${preview.megaSpecies.name}`)
     .setDescription(
-      `Huấn luyện viên **${trainerDisplayName}** chuẩn bị nâng cấp **${shinyTag}${preview.baseCreature.speciesName}** (**${preview.baseCreature.ivPercent}% IV**) thành **${preview.megaSpecies.name}** (` +
-        `\`BST ${preview.megaSpecies.baseStats.bst}\`).`,
+      `Huấn luyện viên **${trainerDisplayName}** chuẩn bị nâng cấp **${shinyTag}${preview.baseCreature.speciesName}** (**${preview.baseCreature.ivPercent}% IV**) thành **${preview.megaSpecies.name}** (\`BST ${preview.megaSpecies.baseStats.bst}\`).`,
     )
-    .addFields(
-      {
-        name: `5 Pokémon Legendary Sẽ Bị Hiến Tế (không thể hoàn tác)`,
-        value: sacrificeLines,
-        inline: false,
-      },
-    )
+    .addFields({
+      name: `5 Pokémon Legendary Sẽ Bị Hiến Tế (không thể hoàn tác)`,
+      value: sacrificeLines,
+      inline: false,
+    })
     .setThumbnail(spriteUrl)
     .setFooter({ text: 'PokeNyan  ·  Bấm Xác nhận bên dưới để tiến hành nghi thức' });
 }
@@ -693,7 +798,9 @@ export function buildMegaSuccessEmbed(
   trainerDisplayName: string,
   result: Extract<MegaExecuteOutcome, { readonly ok: true }>,
 ): EmbedBuilder {
-  const shinyTag = result.upgradedCreature.isShiny ? '★ SHINY · ' : '';
+  const shinyTag = result.upgradedCreature.isShiny
+    ? `${botEmojiRegistry.getShinyMention()} `
+    : '';
   const spriteUrl = result.upgradedCreature.isShiny
     ? result.megaSpecies.shinyAnimatedSpriteUrl
     : result.megaSpecies.animatedSpriteUrl;
@@ -703,14 +810,16 @@ export function buildMegaSuccessEmbed(
     .setTitle(`THỨC TỈNH THÀNH CÔNG · ${shinyTag}${result.megaSpecies.name}`)
     .setDescription(
       [
-        `Chúc mừng **${trainerDisplayName}**! Nghi thức hiến tế ${MEGA_SACRIFICE_COUNT} Legendary đã hoàn tất.`,
-        `Pokémon mới **${shinyTag}${result.megaSpecies.name}** (**${result.upgradedCreature.ivPercent}% IV**) đã được tự động khóa Yêu thích (\`♥\`).`,
+        ansiBanner(
+          `\u001b[1;35m★  THỨC TỈNH MEGA THÀNH CÔNG  ·  ${result.megaSpecies.name.toUpperCase()}!\u001b[0m`,
+        ),
+        `Chúc mừng **${trainerDisplayName}**! Pokémon mới **${shinyTag}${result.megaSpecies.name}** (**${result.upgradedCreature.ivPercent}% IV**) đã được tự động khóa Yêu thích (\`♥\`).`,
       ].join('\n'),
     )
     .addFields(
       {
         name: 'Hệ & Sức Mạnh',
-        value: `${formatTypeTags(result.megaSpecies.types)}  ·  BST **${result.megaSpecies.baseStats.bst}**`,
+        value: `${formatTypeBadges(result.megaSpecies.types)}  ·  BST **${result.megaSpecies.baseStats.bst}**`,
         inline: true,
       },
       {

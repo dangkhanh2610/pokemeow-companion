@@ -52,6 +52,8 @@ export interface RarityConfig {
 
 export interface BallSpec {
   readonly id: BallId;
+  readonly shopIndex: number;
+  readonly category: 'standard' | 'special';
   readonly name: string;
   readonly shortCode: string;
   readonly aliases: readonly string[];

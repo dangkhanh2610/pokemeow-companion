@@ -520,7 +520,10 @@ export function CommunityPortalClient({
                   className="h-7 w-7 shrink-0 object-contain"
                 />
                 <div className="min-w-0">
-                  <p className="truncate text-xs font-semibold text-white">{ball.name}</p>
+                  <p className="truncate text-xs font-semibold text-white">
+                    <span className="mr-1 font-mono text-indigo-300">[{ball.shopIndex}]</span>
+                    {ball.name}
+                  </p>
                   <p className="font-mono text-[11px] text-slate-400">
                     {ball.shortCode.toUpperCase()} • {ball.price.toLocaleString('en-US')} PC
                   </p>
@@ -596,7 +599,24 @@ export function CommunityPortalClient({
                         {showShiny && <span className="mr-1 text-amber-300">★</span>}
                         {species.name}
                       </h3>
-                      <p className="text-xs text-slate-400">{species.types.join(' • ')}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {species.types.map((typeName) => (
+                          <span
+                            key={typeName}
+                            className="inline-flex items-center gap-1 rounded-md border border-slate-700/80 bg-slate-950/70 px-1.5 py-0.5 text-[11px] font-medium text-slate-200"
+                          >
+                            <Image
+                              src={`/types/${typeName.toLowerCase()}.png`}
+                              alt={typeName}
+                              width={14}
+                              height={14}
+                              unoptimized
+                              className="h-3.5 w-3.5 object-contain"
+                            />
+                            {typeName}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                     <span
                       className={`shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-semibold ${rarityMeta.badgeCss}`}

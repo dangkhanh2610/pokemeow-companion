@@ -7,7 +7,7 @@ import {
   type RESTPostAPIApplicationEmojiResult,
 } from 'discord.js';
 import { BALL_CATALOG, getBallSpec } from '@/game/catalog/ball-catalog';
-import type { BallId } from '@/game/types';
+import type { BallId, RarityTier } from '@/game/types';
 
 export interface StoredAppEmoji {
   readonly id: string;
@@ -17,11 +17,46 @@ export interface StoredAppEmoji {
 
 const EMOJI_PREFIX = 'pn_';
 const SHAKE_PREFIX = 'pn_shake_';
+const TYPE_PREFIX = 'pn_type_';
+const RARITY_PREFIX = 'pn_rar_';
 const LEGACY_PREFIX = 'pv_';
+
+const TYPE_SLUGS: readonly string[] = [
+  'normal',
+  'fighting',
+  'flying',
+  'poison',
+  'ground',
+  'rock',
+  'bug',
+  'ghost',
+  'steel',
+  'fire',
+  'water',
+  'grass',
+  'electric',
+  'psychic',
+  'ice',
+  'dragon',
+  'dark',
+  'fairy',
+];
+
+const RARITY_KEYS: readonly (RarityTier | 'shiny')[] = [
+  'common',
+  'uncommon',
+  'rare',
+  'super_rare',
+  'legendary',
+  'mega',
+  'shiny',
+];
 
 export class EmojiRegistry {
   private readonly staticEmojis = new Map<BallId, StoredAppEmoji>();
   private readonly shakeEmojis = new Map<BallId, StoredAppEmoji>();
+  private readonly typeEmojis = new Map<string, StoredAppEmoji>();
+  private readonly rarityEmojis = new Map<string, StoredAppEmoji>();
 
   public async syncAndLoad(token: string, clientId: string): Promise<void> {
     const rest = new REST({ version: '10' }).setToken(token);
@@ -75,23 +110,9 @@ export class EmojiRegistry {
           throw new Error(`HTTP ${res.status} khi tải ${ball.iconUrl}`);
         }
         const buffer = Buffer.from(await res.arrayBuffer());
-        const dataUri = `data:image/png;base64,${buffer.toString('base64')}`;
-
-        const body: RESTPostAPIApplicationEmojiJSONBody = {
-          name: targetName,
-          image: dataUri,
-        };
-
-        const created = (await rest.post(route, {
-          body,
-        })) as RESTPostAPIApplicationEmojiResult;
-
-        if (created.id && created.name) {
-          this.staticEmojis.set(ball.id, {
-            id: created.id,
-            name: created.name,
-            animated: Boolean(created.animated),
-          });
+        const created = await this.uploadEmoji(rest, route, targetName, 'image/png', buffer);
+        if (created) {
+          this.staticEmojis.set(ball.id, created);
           console.log(`[EmojiRegistry] Đã tải lên HD Application Emoji: :${created.name}:`);
         }
       } catch (error) {
@@ -114,23 +135,9 @@ export class EmojiRegistry {
       try {
         const gifPath = resolve(process.cwd(), 'public', 'balls', `shake-${ball.id}.gif`);
         const buffer = await readFile(gifPath);
-        const dataUri = `data:image/gif;base64,${buffer.toString('base64')}`;
-
-        const body: RESTPostAPIApplicationEmojiJSONBody = {
-          name: targetName,
-          image: dataUri,
-        };
-
-        const created = (await rest.post(route, {
-          body,
-        })) as RESTPostAPIApplicationEmojiResult;
-
-        if (created.id && created.name) {
-          this.shakeEmojis.set(ball.id, {
-            id: created.id,
-            name: created.name,
-            animated: true,
-          });
+        const created = await this.uploadEmoji(rest, route, targetName, 'image/gif', buffer);
+        if (created) {
+          this.shakeEmojis.set(ball.id, { ...created, animated: true });
           console.log(`[EmojiRegistry] Đã tải lên Animated Shake Emoji: :${created.name}:`);
         }
       } catch (error) {
@@ -140,6 +147,82 @@ export class EmojiRegistry {
         );
       }
     }
+
+    // 3) Sync 18 official Pokémon Type Icons
+    for (const slug of TYPE_SLUGS) {
+      const targetName = `${TYPE_PREFIX}${slug}`;
+      const existing = byName.get(targetName);
+      if (existing) {
+        this.typeEmojis.set(slug, existing);
+        continue;
+      }
+
+      try {
+        const pngPath = resolve(process.cwd(), 'public', 'types', `${slug}.png`);
+        const buffer = await readFile(pngPath);
+        const created = await this.uploadEmoji(rest, route, targetName, 'image/png', buffer);
+        if (created) {
+          this.typeEmojis.set(slug, created);
+          console.log(`[EmojiRegistry] Đã tải lên Type Emoji: :${created.name}:`);
+        }
+      } catch (error) {
+        console.warn(
+          `[EmojiRegistry] Không thể upload Type emoji ${slug}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+
+    // 4) Sync 7 Rarity Badges
+    for (const rarityKey of RARITY_KEYS) {
+      const targetName = `${RARITY_PREFIX}${rarityKey}`;
+      const existing = byName.get(targetName);
+      if (existing) {
+        this.rarityEmojis.set(rarityKey, existing);
+        continue;
+      }
+
+      try {
+        const pngPath = resolve(process.cwd(), 'public', 'badges', `rar_${rarityKey}.png`);
+        const buffer = await readFile(pngPath);
+        const created = await this.uploadEmoji(rest, route, targetName, 'image/png', buffer);
+        if (created) {
+          this.rarityEmojis.set(rarityKey, created);
+          console.log(`[EmojiRegistry] Đã tải lên Rarity Badge: :${created.name}:`);
+        }
+      } catch (error) {
+        console.warn(
+          `[EmojiRegistry] Không thể upload Rarity badge ${rarityKey}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+  }
+
+  private async uploadEmoji(
+    rest: REST,
+    route: `/${string}`,
+    name: string,
+    mime: 'image/png' | 'image/gif',
+    buffer: Buffer,
+  ): Promise<StoredAppEmoji | null> {
+    const body: RESTPostAPIApplicationEmojiJSONBody = {
+      name,
+      image: `data:${mime};base64,${buffer.toString('base64')}`,
+    };
+
+    const created = (await rest.post(route, {
+      body,
+    })) as RESTPostAPIApplicationEmojiResult;
+
+    if (created.id && created.name) {
+      return {
+        id: created.id,
+        name: created.name,
+        animated: Boolean(created.animated),
+      };
+    }
+    return null;
   }
 
   public getBallMention(ballId: BallId): string {
@@ -174,6 +257,31 @@ export class EmojiRegistry {
       return { id: entry.id, name: entry.name };
     }
     return getBallSpec(ballId).emoji;
+  }
+
+  public getTypeMention(typeName: string): string {
+    const key = typeName.trim().toLowerCase();
+    const entry = this.typeEmojis.get(key);
+    if (entry) {
+      return `<:${entry.name}:${entry.id}>`;
+    }
+    return '';
+  }
+
+  public getRarityMention(rarity: RarityTier): string {
+    const entry = this.rarityEmojis.get(rarity);
+    if (entry) {
+      return `<:${entry.name}:${entry.id}>`;
+    }
+    return '';
+  }
+
+  public getShinyMention(): string {
+    const entry = this.rarityEmojis.get('shiny');
+    if (entry) {
+      return `<:${entry.name}:${entry.id}>`;
+    }
+    return '★';
   }
 }
 

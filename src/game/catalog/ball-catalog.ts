@@ -3,9 +3,11 @@ import type { BallId, BallSpec } from '../types';
 export const BALL_CATALOG: readonly BallSpec[] = [
   {
     id: 'pokeball',
+    shopIndex: 1,
+    category: 'standard',
     name: 'Poké Ball',
     shortCode: 'pb',
-    aliases: ['pb', 'poke', 'pokeball', 'pokéball'],
+    aliases: ['1', 'pb', 'poke', 'pokeball', 'pokéball'],
     price: 200,
     multiplier: 1.0,
     emoji: '●',
@@ -15,9 +17,11 @@ export const BALL_CATALOG: readonly BallSpec[] = [
   },
   {
     id: 'greatball',
+    shopIndex: 2,
+    category: 'standard',
     name: 'Great Ball',
     shortCode: 'gb',
-    aliases: ['gb', 'great', 'greatball'],
+    aliases: ['2', 'gb', 'great', 'greatball'],
     price: 500,
     multiplier: 1.5,
     emoji: '●',
@@ -27,9 +31,11 @@ export const BALL_CATALOG: readonly BallSpec[] = [
   },
   {
     id: 'ultraball',
+    shopIndex: 3,
+    category: 'standard',
     name: 'Ultra Ball',
     shortCode: 'ub',
-    aliases: ['ub', 'ultra', 'ultraball'],
+    aliases: ['3', 'ub', 'ultra', 'ultraball'],
     price: 1500,
     multiplier: 2.2,
     emoji: '●',
@@ -39,9 +45,11 @@ export const BALL_CATALOG: readonly BallSpec[] = [
   },
   {
     id: 'premierball',
+    shopIndex: 4,
+    category: 'special',
     name: 'Premier Ball',
     shortCode: 'prb',
-    aliases: ['prb', 'premier', 'premierball'],
+    aliases: ['4', 'prb', 'premier', 'premierball'],
     price: 5000,
     multiplier: 3.0,
     emoji: '●',
@@ -51,9 +59,11 @@ export const BALL_CATALOG: readonly BallSpec[] = [
   },
   {
     id: 'masterball',
+    shopIndex: 5,
+    category: 'special',
     name: 'Master Ball',
     shortCode: 'mb',
-    aliases: ['mb', 'master', 'masterball'],
+    aliases: ['5', 'mb', 'master', 'masterball'],
     price: 100000,
     multiplier: 100.0,
     emoji: '●',
@@ -79,7 +89,12 @@ export function resolveBallId(input: string): BallId | null {
     return null;
   }
   for (const ball of BALL_CATALOG) {
-    if (ball.id === normalized || ball.shortCode === normalized || ball.aliases.includes(normalized)) {
+    if (
+      ball.id === normalized ||
+      ball.shortCode === normalized ||
+      String(ball.shopIndex) === normalized ||
+      ball.aliases.includes(normalized)
+    ) {
       return ball.id;
     }
   }

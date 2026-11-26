@@ -89,6 +89,11 @@ describe('PokéVerse RPG Core Engine', () => {
       assert.ok(ball.iconUrl.startsWith('https://'), `${ball.id} thiếu iconUrl hợp lệ`);
     }
     assert.equal(resolveBallId('pb'), 'pokeball');
+    assert.equal(resolveBallId('1'), 'pokeball');
+    assert.equal(resolveBallId('2'), 'greatball');
+    assert.equal(resolveBallId('3'), 'ultraball');
+    assert.equal(resolveBallId('4'), 'premierball');
+    assert.equal(resolveBallId('5'), 'masterball');
     assert.equal(resolveBallId('GB'), 'greatball');
     assert.equal(resolveBallId('ultra'), 'ultraball');
     assert.equal(resolveBallId('PRB'), 'premierball');
