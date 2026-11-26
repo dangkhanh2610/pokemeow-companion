@@ -8,6 +8,7 @@
     "start": "next start",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
+    "data:sync-pokedex": "tsx src/game/scripts/sync-pokedex.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/game/__tests__/*.test.ts",

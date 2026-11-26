@@ -6,6 +6,7 @@ export interface BotConfig {
   readonly guildId: string | null;
   readonly prefix: string;
   readonly botName: string;
+  readonly ownerIds: readonly string[];
 }
 
 export function loadBotConfig(): BotConfig {
@@ -14,6 +15,11 @@ export function loadBotConfig(): BotConfig {
   const rawGuildId = process.env['DISCORD_GUILD_ID']?.trim() ?? '';
   const prefix = process.env['BOT_PREFIX']?.trim() || ';';
   const botName = process.env['BOT_NAME']?.trim() || 'PokéVerse';
+  const rawOwnerIds = process.env['BOT_OWNER_IDS']?.trim() ?? '';
+  const ownerIds = rawOwnerIds
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
 
   if (!token || token === 'your_bot_token_here') {
     throw new Error(
@@ -33,5 +39,6 @@ export function loadBotConfig(): BotConfig {
     guildId: rawGuildId.length > 0 ? rawGuildId : null,
     prefix,
     botName,
+    ownerIds,
   };
 }

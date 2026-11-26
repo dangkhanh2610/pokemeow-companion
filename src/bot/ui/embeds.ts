@@ -2,6 +2,7 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'disc
 import { BALL_CATALOG, getBallSpec } from '@/game/catalog/ball-catalog';
 import { defaultCreatureCatalog, RARITY_CONFIGS } from '@/game/catalog/creature-catalog';
 import { xpForNextLevel } from '@/game/engine/spawn-engine';
+import type { GuildToggleState } from '@/game/services/guild-config-service';
 import type { PaginatedDexResult, TrainerBagSummary } from '@/game/services/trainer-service';
 import type {
   BallId,
@@ -10,6 +11,7 @@ import type {
   EncounterRoll,
   LeaderboardEntry,
   LeaderboardMetric,
+  RarityTier,
   ReleaseResult,
   ThrowBallOutcome,
 } from '@/game/types';
@@ -18,8 +20,45 @@ import { botEmojiRegistry } from '../emoji-registry';
 const FAN_DISCLAIMER =
   'PokéVerse • Fan-made phi lợi nhuận, không liên kết với Nintendo / The Pokémon Company';
 
+const RARITY_BADGES: Readonly<Record<RarityTier, string>> = {
+  common: '⚪ Common',
+  uncommon: '🟢 Uncommon',
+  rare: '🔷 Rare',
+  super_rare: '💎 Super Rare',
+  legendary: '👑 Legendary',
+};
+
+const TYPE_EMOJIS: Readonly<Record<string, string>> = {
+  Normal: '⭐',
+  Fire: '🔥',
+  Water: '💧',
+  Grass: '🌿',
+  Electric: '⚡',
+  Ice: '❄️',
+  Fighting: '🥊',
+  Poison: '☠️',
+  Ground: '⛰️',
+  Flying: '🪽',
+  Psychic: '🔮',
+  Bug: '🐛',
+  Rock: '🪨',
+  Ghost: '👻',
+  Dragon: '🐉',
+  Dark: '🌑',
+  Steel: '⚙️',
+  Fairy: '🪄',
+};
+
 function formatNumber(n: number): string {
   return n.toLocaleString('en-US');
+}
+
+function formatDexNo(id: number): string {
+  return `#${String(id).padStart(3, '0')}`;
+}
+
+function formatTypes(types: readonly string[]): string {
+  return types.map((typeName) => `${TYPE_EMOJIS[typeName] ?? '•'} ${typeName}`).join(' • ');
 }
 
 export function buildCatchButtonsRow(
@@ -49,6 +88,7 @@ export function buildCatchButtonsRow(
 
 export function buildWildEncounterEmbed(
   trainerDisplayName: string,
+  trainerAvatarUrl: string,
   roll: EncounterRoll,
   expiresAt: Date,
 ): EmbedBuilder {
@@ -56,22 +96,29 @@ export function buildWildEncounterEmbed(
   const imageUrl = roll.isShiny
     ? roll.species.shinyAnimatedSpriteUrl
     : roll.species.animatedSpriteUrl;
-  const shinyBanner = roll.isShiny ? '✨ **SHINY!** ' : '';
+  const shinyTitle = roll.isShiny ? '✨ SHINY ' : '';
   const expireEpoch = Math.floor(expiresAt.getTime() / 1000);
+  const rarityDisplay = `${RARITY_BADGES[roll.species.rarity]}${roll.isShiny ? ' • ✨ SHINY' : ''}`;
 
   return new EmbedBuilder()
     .setColor(roll.isShiny ? 0xfacc15 : rarityMeta.colorHex)
-    .setTitle(`${shinyBanner}Một ${roll.species.name} hoang dã đã xuất hiện!`)
-    .setDescription(
-      [
-        `Huấn luyện viên: **${trainerDisplayName}**`,
-        `Độ hiếm: **${rarityMeta.label}** • Hệ: **${roll.species.types.join(' / ')}**`,
-        `Chỉ số IV tiềm năng: **${roll.ivPercent}%** (${roll.ivTotal}/186)`,
-        `Hết hạn: <t:${expireEpoch}:R> — Chọn bóng bên dưới để ném!`,
-      ].join('\n'),
+    .setAuthor({
+      name: `${trainerDisplayName} gặp Pokémon hoang dã!`,
+      iconURL: trainerAvatarUrl || undefined,
+    })
+    .setTitle(`${shinyTitle}${roll.species.name}  ${formatDexNo(roll.species.id)}`)
+    .setDescription(`⏳ Bỏ chạy <t:${expireEpoch}:R> • Chọn Poké Ball bên dưới để bắt!`)
+    .addFields(
+      { name: 'Độ Hiếm', value: rarityDisplay, inline: true },
+      { name: 'Hệ', value: formatTypes(roll.species.types), inline: true },
+      {
+        name: 'Chỉ Số IV',
+        value: `**${roll.ivPercent}%** (${roll.ivTotal}/186)`,
+        inline: true,
+      },
     )
     .setImage(imageUrl)
-    .setFooter({ text: FAN_DISCLAIMER });
+    .setFooter({ text: 'PokéVerse • Bấm nút bóng bên dưới để ném' });
 }
 
 export function buildThrowingEmbed(
@@ -91,15 +138,22 @@ export function buildThrowingEmbed(
       name: `${ball.name} đang bay ra...`,
       iconURL: ball.iconUrl,
     })
-    .setTitle(`${ballMention} Đang ném **${ball.name}** về phía **${shinyTag}${species.name}**...`)
-    .setDescription(
-      [
-        `Huấn luyện viên: **${trainerDisplayName}**`,
-        '✨ Quả bóng đang rung lắc dữ dội... Chờ kết quả!',
-      ].join('\n'),
+    .setTitle(`${ballMention} Đang ném ${ball.name} về phía ${shinyTag}${species.name}...`)
+    .setDescription(`Huấn luyện viên: **${trainerDisplayName}**`)
+    .addFields(
+      {
+        name: 'Trạng Thái',
+        value: '✨ Quả bóng đang rung lắc dữ dội...',
+        inline: true,
+      },
+      {
+        name: 'Mục Tiêu',
+        value: `${RARITY_BADGES[species.rarity]}${isShiny ? ' • ✨ SHINY' : ''}`,
+        inline: true,
+      },
     )
     .setThumbnail(spriteUrl)
-    .setFooter({ text: FAN_DISCLAIMER });
+    .setFooter({ text: 'PokéVerse • Đang chờ kết quả bắt...' });
 }
 
 export function buildCatchResultEmbed(
@@ -108,32 +162,45 @@ export function buildCatchResultEmbed(
 ): EmbedBuilder {
   const ball = getBallSpec(outcome.ballId);
   const ballMention = botEmojiRegistry.getBallMention(outcome.ballId);
-  const rarityMeta = RARITY_CONFIGS[outcome.species.rarity];
   const spriteUrl = outcome.isShiny
     ? outcome.species.shinyAnimatedSpriteUrl
     : outcome.species.animatedSpriteUrl;
-  const shinyTag = outcome.isShiny ? '✨ Shiny ' : '';
+  const shinyTag = outcome.isShiny ? '✨ SHINY ' : '';
   const chancePct = (outcome.catchChance * 100).toFixed(1);
 
   if (outcome.caught) {
-    const levelLine = outcome.leveledUp
-      ? `🎉 **LÊN CẤP!** Bạn đã đạt **Level ${outcome.newLevel}**!`
-      : `Cấp hiện tại: **Lv.${outcome.newLevel}**`;
+    const levelBanner = outcome.leveledUp
+      ? `\n🎉 **LÊN CẤP!** Chào mừng đến **Level ${outcome.newLevel}**!`
+      : '';
 
     const embed = new EmbedBuilder()
       .setColor(outcome.isShiny ? 0xfacc15 : 0x10b981)
-      .setAuthor({ name: `${ball.name}`, iconURL: ball.iconUrl })
-      .setTitle(`✅ Bắt thành công ${shinyTag}${outcome.species.name}!`)
-      .setDescription(
-        [
-          `Huấn luyện viên: **${trainerDisplayName}**`,
-          `Bóng sử dụng: ${ballMention} **${ball.name}** (Tỉ lệ: ${chancePct}%)`,
-          `Độ hiếm: **${rarityMeta.label}** • IVs: **${outcome.ivPercent}%** (${outcome.ivTotal}/186)`,
-          `Phần thưởng: **+${formatNumber(outcome.coinsEarned)} PC** • **+${outcome.xpEarned} XP**`,
-          `Số dư mới: **${formatNumber(outcome.newCoinsBalance)} PC** • ${levelLine}`,
-        ].join('\n'),
+      .setAuthor({
+        name: `${ball.name} • Bắt thành công!`,
+        iconURL: ball.iconUrl,
+      })
+      .setTitle(`✅ ${shinyTag}${outcome.species.name}  ${formatDexNo(outcome.species.id)}`)
+      .setDescription(`Huấn luyện viên: **${trainerDisplayName}**${levelBanner}`)
+      .addFields(
+        {
+          name: 'Bóng & Tỉ Lệ',
+          value: `${ballMention} **${ball.name}** (${chancePct}%)`,
+          inline: true,
+        },
+        {
+          name: 'Độ Hiếm & IVs',
+          value: `${RARITY_BADGES[outcome.species.rarity]}\n**${outcome.ivPercent}%** (${outcome.ivTotal}/186)`,
+          inline: true,
+        },
+        {
+          name: 'Phần Thưởng',
+          value: `💰 **+${formatNumber(outcome.coinsEarned)} PC**\n⚡ **+${outcome.xpEarned} XP**`,
+          inline: true,
+        },
       )
-      .setFooter({ text: FAN_DISCLAIMER });
+      .setFooter({
+        text: `PokéVerse • Số dư: ${formatNumber(outcome.newCoinsBalance)} PC • Lv.${outcome.newLevel}`,
+      });
 
     if (outcome.isShiny || outcome.species.rarity === 'legendary') {
       embed.setImage(spriteUrl);
@@ -145,17 +212,16 @@ export function buildCatchResultEmbed(
 
   return new EmbedBuilder()
     .setColor(0xef4444)
-    .setAuthor({ name: `${ball.name}`, iconURL: ball.iconUrl })
-    .setTitle(`💨 Ôi không! ${shinyTag}${outcome.species.name} đã chạy thoát!`)
+    .setAuthor({
+      name: `${ball.name} • Pokémon đã bỏ chạy`,
+      iconURL: ball.iconUrl,
+    })
+    .setTitle(`💨 ${shinyTag}${outcome.species.name} đã thoát mất!`)
     .setDescription(
-      [
-        `Huấn luyện viên: **${trainerDisplayName}**`,
-        `Bạn đã ném ${ballMention} **${ball.name}** (Tỉ lệ bắt: ${chancePct}%) nhưng thất bại.`,
-        `Hãy thử tìm thêm lượt mới bằng \`/p\` hoặc \`;p\` nhé!`,
-      ].join('\n'),
+      `Huấn luyện viên **${trainerDisplayName}** đã ném ${ballMention} **${ball.name}** (Tỉ lệ: ${chancePct}%) nhưng chưa thành công.`,
     )
     .setThumbnail(spriteUrl)
-    .setFooter({ text: FAN_DISCLAIMER });
+    .setFooter({ text: 'PokéVerse • Gõ /p hoặc ;p để tìm lượt mới' });
 }
 
 export function buildShopEmbed(prefix: string): EmbedBuilder {
@@ -174,7 +240,7 @@ export function buildShopEmbed(prefix: string): EmbedBuilder {
         `💡 Cách mua: \`/buy ball:pokeball quantity:10\` hoặc \`${prefix}buy pb 10\``,
       ].join('\n'),
     )
-    .setFooter({ text: FAN_DISCLAIMER });
+    .setFooter({ text: 'PokéVerse • Cửa hàng vật phẩm' });
 }
 
 export function buildBagEmbed(summary: TrainerBagSummary): EmbedBuilder {
@@ -196,7 +262,7 @@ export function buildBagEmbed(summary: TrainerBagSummary): EmbedBuilder {
       ].join('\n'),
     )
     .setThumbnail(summary.avatarUrl || null)
-    .setFooter({ text: FAN_DISCLAIMER });
+    .setFooter({ text: 'PokéVerse • Kho đồ cá nhân' });
 }
 
 export function buildProfileEmbed(summary: TrainerBagSummary): EmbedBuilder {
@@ -240,7 +306,7 @@ export function buildProfileEmbed(summary: TrainerBagSummary): EmbedBuilder {
         inline: false,
       },
     )
-    .setFooter({ text: FAN_DISCLAIMER });
+    .setFooter({ text: 'PokéVerse • Hồ sơ huấn luyện viên' });
 }
 
 export function buildDexEmbed(
@@ -261,7 +327,7 @@ export function buildDexEmbed(
     .setTitle(`📖 Pokédex của ${trainerDisplayName}`)
     .setDescription(lines.join('\n'))
     .setFooter({
-      text: `Trang ${dex.page}/${dex.totalPages} • Tổng ${dex.totalCount} Pokémon • ${FAN_DISCLAIMER}`,
+      text: `Trang ${dex.page}/${dex.totalPages} • Tổng ${dex.totalCount} Pokémon`,
     });
 }
 
@@ -281,7 +347,7 @@ export function buildDailyEmbed(
           `Quay lại nhận thưởng tiếp theo: <t:${nextEpoch}:R>`,
         ].join('\n'),
       )
-      .setFooter({ text: FAN_DISCLAIMER });
+      .setFooter({ text: 'PokéVerse • Điểm danh hàng ngày' });
   }
 
   const pbIcon = botEmojiRegistry.getBallMention('pokeball');
@@ -299,7 +365,7 @@ export function buildDailyEmbed(
         `Số dư hiện tại: **${formatNumber(result.newCoinsBalance)} PC**`,
       ].join('\n'),
     )
-    .setFooter({ text: FAN_DISCLAIMER });
+    .setFooter({ text: 'PokéVerse • Điểm danh hàng ngày' });
 }
 
 export function buildReleaseEmbed(
@@ -313,7 +379,7 @@ export function buildReleaseEmbed(
       .setDescription(
         `${trainerDisplayName} hiện không có Pokémon trùng nào (hệ thống luôn giữ lại cá thể IV cao nhất mỗi loài, cũng như giữ toàn bộ **Shiny** và **Legendary**).`,
       )
-      .setFooter({ text: FAN_DISCLAIMER });
+      .setFooter({ text: 'PokéVerse • Quản lý bộ sưu tập' });
   }
 
   return new EmbedBuilder()
@@ -327,7 +393,7 @@ export function buildReleaseEmbed(
         `Số dư mới: **${formatNumber(result.newCoinsBalance)} PC**`,
       ].join('\n'),
     )
-    .setFooter({ text: FAN_DISCLAIMER });
+    .setFooter({ text: 'PokéVerse • Quản lý bộ sưu tập' });
 }
 
 export function buildLeaderboardEmbed(
@@ -354,7 +420,7 @@ export function buildLeaderboardEmbed(
     .setColor(0xf59e0b)
     .setTitle(metricTitles[metric])
     .setDescription(lines.join('\n'))
-    .setFooter({ text: FAN_DISCLAIMER });
+    .setFooter({ text: 'PokéVerse • Bảng xếp hạng cộng đồng' });
 }
 
 export function buildHelpEmbed(prefix: string, botName: string): EmbedBuilder {
@@ -374,8 +440,45 @@ export function buildHelpEmbed(prefix: string, botName: string): EmbedBuilder {
         `• \`/release\` hoặc \`${prefix}release\` — Thả Pokémon trùng để kiếm thêm PC`,
         `• \`/daily\` hoặc \`${prefix}daily\` — Nhận thưởng điểm danh mỗi 24 giờ`,
         `• \`/lb\` hoặc \`${prefix}lb [catches|coins|shinies|level]\` — Xem bảng xếp hạng`,
+        `• \`/bot <on|off|status>\` hoặc \`${prefix}bot <on|off|status>\` — Bật/tắt bot trong server (Admin)`,
         '',
         `*${FAN_DISCLAIMER}. Chỉ nhận ủng hộ tự nguyện để duy trì server.*`,
       ].join('\n'),
     );
+}
+
+export function buildBotStatusEmbed(
+  botName: string,
+  state: GuildToggleState,
+  changedBy?: string,
+): EmbedBuilder {
+  if (state.enabled) {
+    const actorLine = changedBy ? `Kích hoạt bởi: **${changedBy}**` : 'Bot đang hoạt động bình thường.';
+    return new EmbedBuilder()
+      .setColor(0x10b981)
+      .setTitle(`🟢 ${botName} ĐANG BẬT trong server này`)
+      .setDescription(
+        [
+          actorLine,
+          'Mọi người chơi đều có thể dùng lệnh `/p`, `;p`, cửa hàng và các tính năng khác.',
+        ].join('\n'),
+      )
+      .setFooter({ text: 'PokéVerse • Quản trị server' });
+  }
+
+  const actor = changedBy ?? state.disabledBy ?? 'Quản trị viên';
+  const timeInfo = state.disabledAt
+    ? `<t:${Math.floor(state.disabledAt.getTime() / 1000)}:R>`
+    : 'vừa xong';
+
+  return new EmbedBuilder()
+    .setColor(0xef4444)
+    .setTitle(`🔴 ${botName} ĐANG TẮT trong server này`)
+    .setDescription(
+      [
+        `Tạm tắt bởi: **${actor}** (${timeInfo})`,
+        'Bot sẽ không phản hồi các lệnh chơi game cho đến khi Admin bật lại bằng `/bot on` hoặc `;bot on`.',
+      ].join('\n'),
+    )
+    .setFooter({ text: 'PokéVerse • Quản trị server' });
 }

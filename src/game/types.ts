@@ -11,11 +11,23 @@ export interface CreatureIVs {
   readonly spd: number;
 }
 
+export interface CreatureBaseStats {
+  readonly hp: number;
+  readonly atk: number;
+  readonly def: number;
+  readonly spAtk: number;
+  readonly spDef: number;
+  readonly spd: number;
+  readonly bst: number;
+}
+
 export interface CreatureSpecies {
   readonly id: number;
+  readonly slug: string;
   readonly name: string;
   readonly rarity: RarityTier;
   readonly types: readonly string[];
+  readonly baseStats: CreatureBaseStats;
   readonly baseCatchRate: number;
   readonly baseReward: number;
   readonly artworkUrl: string;

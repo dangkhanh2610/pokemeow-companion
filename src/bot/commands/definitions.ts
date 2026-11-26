@@ -1,4 +1,8 @@
-import { SlashCommandBuilder, type RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
+import {
+  PermissionFlagsBits,
+  SlashCommandBuilder,
+  type RESTPostAPIChatInputApplicationCommandsJSONBody,
+} from 'discord.js';
 import { BALL_CATALOG } from '@/game/catalog/ball-catalog';
 
 const ballChoices = BALL_CATALOG.map((ball) => ({
@@ -89,5 +93,22 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
   new SlashCommandBuilder()
     .setName('help')
     .setDescription('Xem hướng dẫn chơi và danh sách lệnh của PokéVerse')
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('bot')
+    .setDescription('Bật, tắt hoặc kiểm tra trạng thái bot trong server (Admin)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption((opt) =>
+      opt
+        .setName('action')
+        .setDescription('Hành động muốn thực hiện')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Bật bot (On)', value: 'on' },
+          { name: 'Tắt bot (Off)', value: 'off' },
+          { name: 'Xem trạng thái (Status)', value: 'status' },
+        ),
+    )
     .toJSON(),
 ];

@@ -6,23 +6,39 @@ import { CatchStrategyRegistry } from '../engine/catch-strategy';
 import { applyXp, computeIvSummary, SpawnEngine, xpForNextLevel } from '../engine/spawn-engine';
 
 describe('PokéVerse RPG Core Engine', () => {
-  it('PokemonCreatureCatalog chứa đúng 60 loài với ID duy nhất và đầy đủ 5 độ hiếm', () => {
+  it('PokemonCreatureCatalog tải đầy đủ toàn bộ 1,025 loài National Dex với đủ 5 độ hiếm', () => {
     const catalog = new PokemonCreatureCatalog();
     const all = catalog.getAll();
-    assert.equal(all.length, 60);
+    assert.equal(all.length, 1025);
 
     const uniqueIds = new Set(all.map((s) => s.id));
-    assert.equal(uniqueIds.size, 60);
+    assert.equal(uniqueIds.size, 1025);
 
     assert.ok(catalog.getByRarity('common').length > 0);
     assert.ok(catalog.getByRarity('uncommon').length > 0);
     assert.ok(catalog.getByRarity('rare').length > 0);
     assert.ok(catalog.getByRarity('super_rare').length > 0);
     assert.ok(catalog.getByRarity('legendary').length > 0);
-    assert.equal(catalog.getById(25)?.name, 'Pikachu');
+
+    const pikachu = catalog.getById(25);
+    const mrMime = catalog.getById(122);
+    const hoOh = catalog.getById(250);
+    const rayquaza = catalog.getById(384);
+    const koraidon = catalog.getById(1007);
+    const pecharunt = catalog.getById(1025);
+
+    assert.equal(pikachu?.name, 'Pikachu');
+    assert.equal(mrMime?.name, 'Mr. Mime');
+    assert.equal(mrMime?.slug, 'mrmime');
+    assert.equal(hoOh?.name, 'Ho-Oh');
+    assert.equal(hoOh?.slug, 'hooh');
+    assert.equal(rayquaza?.rarity, 'legendary');
+    assert.equal(koraidon?.name, 'Koraidon');
+    assert.equal(pecharunt?.name, 'Pecharunt');
     assert.ok(catalog.search('dragon').length >= 1);
 
     for (const species of all) {
+      assert.ok(species.baseStats.bst > 0, `${species.name} thiếu baseStats.bst`);
       assert.ok(
         species.animatedSpriteUrl.startsWith('https://'),
         `${species.name} thiếu animatedSpriteUrl hợp lệ`,

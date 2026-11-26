@@ -2,7 +2,18 @@
 
 import Image from 'next/image';
 import { useMemo, useState } from 'react';
-import { BookOpen, Coins, Crown, RefreshCw, Search, Sparkles, Trophy, Users } from 'lucide-react';
+import {
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  Coins,
+  Crown,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Trophy,
+  Users,
+} from 'lucide-react';
 import { BALL_CATALOG, getBallSpec } from '@/game/catalog/ball-catalog';
 import type {
   CommunityOverview,
@@ -55,6 +66,8 @@ export function CommunityPortalClient({
 
   const [dexQuery, setDexQuery] = useState('');
   const [dexRarity, setDexRarity] = useState<RarityTier | 'all'>('all');
+  const [dexPage, setDexPage] = useState(1);
+  const DEX_PAGE_SIZE = 24;
 
   async function refreshLeaderboard(nextMetric: LeaderboardMetric): Promise<void> {
     setMetric(nextMetric);
@@ -83,7 +96,7 @@ export function CommunityPortalClient({
   }
 
   const filteredCatalog = useMemo(() => {
-    const q = dexQuery.trim().toLowerCase();
+    const q = dexQuery.trim().toLowerCase().replace(/^#/, '');
     return catalog.filter((species) => {
       if (dexRarity !== 'all' && species.rarity !== dexRarity) {
         return false;
@@ -94,10 +107,18 @@ export function CommunityPortalClient({
       return (
         species.name.toLowerCase().includes(q) ||
         String(species.id) === q ||
+        species.slug.includes(q) ||
         species.types.some((t) => t.toLowerCase().includes(q))
       );
     });
   }, [catalog, dexQuery, dexRarity]);
+
+  const dexTotalPages = Math.max(1, Math.ceil(filteredCatalog.length / DEX_PAGE_SIZE));
+  const safeDexPage = Math.min(dexPage, dexTotalPages);
+  const paginatedCatalog = useMemo(() => {
+    const start = (safeDexPage - 1) * DEX_PAGE_SIZE;
+    return filteredCatalog.slice(start, start + DEX_PAGE_SIZE);
+  }, [filteredCatalog, safeDexPage]);
 
   return (
     <div className="space-y-6">
@@ -369,7 +390,10 @@ export function CommunityPortalClient({
               <input
                 type="text"
                 value={dexQuery}
-                onChange={(e) => setDexQuery(e.target.value)}
+                onChange={(e) => {
+                  setDexQuery(e.target.value);
+                  setDexPage(1);
+                }}
                 placeholder="Tìm theo tên Pokémon, số Dex (#25) hoặc hệ (Dragon, Fire)..."
                 className="w-full rounded-xl border border-slate-700 bg-slate-950/80 py-2.5 pl-9 pr-4 text-sm text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
               />
@@ -380,7 +404,10 @@ export function CommunityPortalClient({
                 <button
                   key={filter.id}
                   type="button"
-                  onClick={() => setDexRarity(filter.id)}
+                  onClick={() => {
+                    setDexRarity(filter.id);
+                    setDexPage(1);
+                  }}
                   className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                     dexRarity === filter.id
                       ? 'bg-emerald-500/25 text-emerald-200 ring-1 ring-emerald-500/60'
@@ -417,8 +444,44 @@ export function CommunityPortalClient({
             ))}
           </div>
 
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800/80 bg-slate-950/50 px-4 py-2.5 text-xs text-slate-300">
+            <span>
+              Hiển thị{' '}
+              <strong className="font-mono text-white">
+                {paginatedCatalog.length > 0 ? (safeDexPage - 1) * DEX_PAGE_SIZE + 1 : 0}–
+                {(safeDexPage - 1) * DEX_PAGE_SIZE + paginatedCatalog.length}
+              </strong>{' '}
+              trong <strong className="font-mono text-emerald-300">{filteredCatalog.length}</strong>{' '}
+              loài khớp bộ lọc
+            </span>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setDexPage((p) => Math.max(1, p - 1))}
+                disabled={safeDexPage <= 1}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-medium text-slate-200 transition hover:border-indigo-500/60 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                Trước
+              </button>
+              <span className="font-mono text-xs text-slate-300 tabular-nums">
+                Trang {safeDexPage} / {dexTotalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDexPage((p) => Math.min(dexTotalPages, p + 1))}
+                disabled={safeDexPage >= dexTotalPages}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-medium text-slate-200 transition hover:border-indigo-500/60 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Sau
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {filteredCatalog.map((species) => {
+            {paginatedCatalog.map((species) => {
               const rarityMeta = rarityConfigs[species.rarity];
               return (
                 <div
@@ -427,7 +490,9 @@ export function CommunityPortalClient({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <span className="font-mono text-xs text-slate-500">#{species.id}</span>
+                      <span className="font-mono text-xs text-slate-500">
+                        #{String(species.id).padStart(4, '0')} • BST {species.baseStats.bst}
+                      </span>
                       <h3 className="text-base font-bold text-white">{species.name}</h3>
                       <p className="text-xs text-slate-400">{species.types.join(' • ')}</p>
                     </div>

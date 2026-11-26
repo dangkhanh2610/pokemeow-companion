@@ -1,17 +1,21 @@
-import type {
-  ButtonInteraction,
-  ChatInputCommandInteraction,
-  Message,
-  User,
+import {
+  PermissionFlagsBits,
+  type ButtonInteraction,
+  type ChatInputCommandInteraction,
+  type Message,
+  type PermissionsBitField,
+  type User,
 } from 'discord.js';
 import { resolveBallId } from '@/game/catalog/ball-catalog';
 import { economyService } from '@/game/services/economy-service';
 import { encounterService } from '@/game/services/encounter-service';
+import { guildConfigService } from '@/game/services/guild-config-service';
 import { leaderboardService } from '@/game/services/leaderboard-service';
 import { trainerService, type TrainerIdentityInput } from '@/game/services/trainer-service';
 import type { BallId, LeaderboardMetric } from '@/game/types';
 import {
   buildBagEmbed,
+  buildBotStatusEmbed,
   buildCatchButtonsRow,
   buildCatchResultEmbed,
   buildDailyEmbed,
@@ -55,14 +59,84 @@ function parseMetric(raw: string | undefined): LeaderboardMetric {
 export class BotCommandRouter {
   private readonly prefix: string;
   private readonly botName: string;
+  private readonly ownerIds: ReadonlySet<string>;
 
-  public constructor(prefix: string, botName: string) {
+  public constructor(prefix: string, botName: string, ownerIds: readonly string[] = []) {
     this.prefix = prefix;
     this.botName = botName;
+    this.ownerIds = new Set(ownerIds);
+  }
+
+  private isAdminOrOwner(
+    userId: string,
+    permissions: Readonly<PermissionsBitField> | null | undefined,
+  ): boolean {
+    if (this.ownerIds.has(userId)) {
+      return true;
+    }
+    return Boolean(
+      permissions?.has(PermissionFlagsBits.Administrator) ||
+        permissions?.has(PermissionFlagsBits.ManageGuild),
+    );
   }
 
   public async handleSlashCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     const meta = extractTrainerMeta(interaction.user);
+
+    if (interaction.commandName === 'bot') {
+      if (!interaction.guildId) {
+        await interaction.reply({
+          content: '⚠️ Lệnh bật/tắt bot chỉ dùng trong server Discord.',
+          ephemeral: true,
+        });
+        return;
+      }
+      if (!this.isAdminOrOwner(interaction.user.id, interaction.memberPermissions)) {
+        await interaction.reply({
+          content:
+            '🔒 Chỉ Quản trị viên (Admin / Manage Server) mới có quyền bật hoặc tắt bot.',
+          ephemeral: true,
+        });
+        return;
+      }
+      const action = interaction.options.getString('action') ?? 'status';
+      if (action === 'on') {
+        const nextState = await guildConfigService.setGuildEnabled(
+          interaction.guildId,
+          true,
+          meta.displayName,
+        );
+        await interaction.reply({
+          embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+        });
+        return;
+      }
+      if (action === 'off') {
+        const nextState = await guildConfigService.setGuildEnabled(
+          interaction.guildId,
+          false,
+          meta.displayName,
+        );
+        await interaction.reply({
+          embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+        });
+        return;
+      }
+      const current = await guildConfigService.getGuildStatus(interaction.guildId);
+      await interaction.reply({ embeds: [buildBotStatusEmbed(this.botName, current)] });
+      return;
+    }
+
+    if (interaction.guildId) {
+      const guildState = await guildConfigService.getGuildStatus(interaction.guildId);
+      if (!guildState.enabled) {
+        await interaction.reply({
+          content: '🔴 Bot hiện đang tạm tắt trong server này bởi Quản trị viên.',
+          ephemeral: true,
+        });
+        return;
+      }
+    }
 
     switch (interaction.commandName) {
       case 'p': {
@@ -80,7 +154,7 @@ export class BotCommandRouter {
           return;
         }
         await interaction.editReply({
-          embeds: [buildWildEncounterEmbed(meta.displayName, result.roll, result.expiresAt)],
+          embeds: [buildWildEncounterEmbed(meta.displayName, meta.avatarUrl, result.roll, result.expiresAt)],
           components: [buildCatchButtonsRow(result.encounterId, result.ballInventory)],
         });
         return;
@@ -198,6 +272,46 @@ export class BotCommandRouter {
     const arg2 = parts[2];
     const meta = extractTrainerMeta(message.author);
 
+    if (command === 'bot') {
+      if (!this.isAdminOrOwner(message.author.id, message.member?.permissions)) {
+        await message.reply(
+          '🔒 Chỉ Quản trị viên (Admin / Manage Server) mới có quyền bật hoặc tắt bot.',
+        );
+        return;
+      }
+      const sub = arg1?.toLowerCase() ?? 'status';
+      if (sub === 'on' || sub === 'enable') {
+        const nextState = await guildConfigService.setGuildEnabled(
+          message.guild.id,
+          true,
+          meta.displayName,
+        );
+        await message.reply({
+          embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+        });
+        return;
+      }
+      if (sub === 'off' || sub === 'disable') {
+        const nextState = await guildConfigService.setGuildEnabled(
+          message.guild.id,
+          false,
+          meta.displayName,
+        );
+        await message.reply({
+          embeds: [buildBotStatusEmbed(this.botName, nextState, meta.displayName)],
+        });
+        return;
+      }
+      const current = await guildConfigService.getGuildStatus(message.guild.id);
+      await message.reply({ embeds: [buildBotStatusEmbed(this.botName, current)] });
+      return;
+    }
+
+    const guildState = await guildConfigService.getGuildStatus(message.guild.id);
+    if (!guildState.enabled) {
+      return;
+    }
+
     switch (command) {
       case 'p':
       case 'pokemon': {
@@ -214,7 +328,7 @@ export class BotCommandRouter {
           return;
         }
         await message.reply({
-          embeds: [buildWildEncounterEmbed(meta.displayName, result.roll, result.expiresAt)],
+          embeds: [buildWildEncounterEmbed(meta.displayName, meta.avatarUrl, result.roll, result.expiresAt)],
           components: [buildCatchButtonsRow(result.encounterId, result.ballInventory)],
         });
         return;
@@ -319,6 +433,17 @@ export class BotCommandRouter {
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     if (!interaction.customId.startsWith('catch:')) {
       return;
+    }
+
+    if (interaction.guildId) {
+      const guildState = await guildConfigService.getGuildStatus(interaction.guildId);
+      if (!guildState.enabled) {
+        await interaction.reply({
+          content: '🔴 Bot hiện đang tạm tắt trong server này bởi Quản trị viên.',
+          ephemeral: true,
+        });
+        return;
+      }
     }
 
     const segments = interaction.customId.split(':');

@@ -6,7 +6,7 @@ import { BotCommandRouter } from './handlers/command-router';
 async function bootstrapBot(): Promise<void> {
   const config = loadBotConfig();
   await botEmojiRegistry.syncAndLoad(config.token, config.clientId);
-  const router = new BotCommandRouter(config.prefix, config.botName);
+  const router = new BotCommandRouter(config.prefix, config.botName, config.ownerIds);
 
   const client = new Client({
     intents: [
