@@ -5,17 +5,16 @@ import {
 } from '../catalog/creature-catalog';
 import type { CreatureIVs, CreatureSpecies, EncounterRoll, RarityTier } from '../types';
 
-export const SHINY_CHANCE = 0.015;
+export const SHINY_CHANCE = 1 / 1024;
 const MAX_SINGLE_IV = 31;
 const MAX_TOTAL_IV = 186;
 
-const RARITY_ORDER: readonly RarityTier[] = [
+const WILD_RARITY_ORDER: readonly RarityTier[] = [
   'common',
   'uncommon',
   'rare',
   'super_rare',
   'legendary',
-  'mega',
 ];
 
 export type RandomFn = () => number;
@@ -64,13 +63,13 @@ export class SpawnEngine {
   }
 
   public rollRarity(): RarityTier {
-    const totalWeight = RARITY_ORDER.reduce(
+    const totalWeight = WILD_RARITY_ORDER.reduce(
       (sum, tier) => sum + RARITY_CONFIGS[tier].weight,
       0,
     );
     let threshold = this.random() * totalWeight;
 
-    for (const tier of RARITY_ORDER) {
+    for (const tier of WILD_RARITY_ORDER) {
       threshold -= RARITY_CONFIGS[tier].weight;
       if (threshold <= 0) {
         return tier;

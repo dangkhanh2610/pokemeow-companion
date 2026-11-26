@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { BALL_CATALOG, getBallSpec, resolveBallId } from '../catalog/ball-catalog';
-import { PokemonCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-catalog';
+import { defaultCreatureCatalog, PokemonCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-catalog';
 import { CatchStrategyRegistry } from '../engine/catch-strategy';
-import { applyXp, computeIvSummary, SpawnEngine, xpForNextLevel } from '../engine/spawn-engine';
+import { applyXp, computeIvSummary, SHINY_CHANCE, SpawnEngine, xpForNextLevel } from '../engine/spawn-engine';
 import { isChannelAllowed, validatePrefix } from '../services/guild-config-service';
 
 describe('PokéVerse RPG Core Engine', () => {
@@ -50,6 +50,17 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.equal(primalGroudon?.rarity, 'mega');
     assert.equal(megaRayquaza?.rarity, 'mega');
     assert.ok(catalog.search('dragon').length >= 1);
+    assert.equal(catalog.findMegaByQuery('rayquaza')?.name, 'Rayquaza-Mega');
+    assert.equal(catalog.findMegaByQuery('charizard x')?.name, 'Charizard-Mega-X');
+    assert.equal(RARITY_CONFIGS.legendary.weight, 0.5);
+    assert.equal(RARITY_CONFIGS.mega.weight, 0);
+    assert.equal(SHINY_CHANCE, 1 / 1024);
+
+    // Đảm bảo SpawnEngine không bao giờ spawn ra Mega ngoài tự nhiên
+    for (let i = 0; i < 500; i += 1) {
+      const fixedEngine = new SpawnEngine(defaultCreatureCatalog, () => i / 500);
+      assert.notEqual(fixedEngine.rollRarity(), 'mega');
+    }
 
     for (const species of all) {
       assert.ok(species.baseStats.bst > 0, `${species.name} thiếu baseStats.bst`);

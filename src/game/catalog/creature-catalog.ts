@@ -11,6 +11,8 @@ export interface ICreatureCatalog {
   getAll(): readonly CreatureSpecies[];
   getById(id: number): CreatureSpecies | undefined;
   getByRarity(rarity: RarityTier): readonly CreatureSpecies[];
+  getMegaForms(): readonly CreatureSpecies[];
+  findMegaByQuery(query: string): CreatureSpecies | undefined;
   search(query: string, rarity?: RarityTier): readonly CreatureSpecies[];
 }
 
@@ -34,7 +36,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   common: {
     tier: 'common',
     label: 'Common',
-    weight: 51,
+    weight: 57,
     colorHex: 0x94a3b8,
     badgeCss: 'bg-slate-500/20 text-slate-300 border-slate-500/40',
     xpReward: 25,
@@ -42,7 +44,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   uncommon: {
     tier: 'uncommon',
     label: 'Uncommon',
-    weight: 25.5,
+    weight: 28,
     colorHex: 0x10b981,
     badgeCss: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
     xpReward: 45,
@@ -50,7 +52,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   rare: {
     tier: 'rare',
     label: 'Rare',
-    weight: 13,
+    weight: 12,
     colorHex: 0x3b82f6,
     badgeCss: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
     xpReward: 90,
@@ -58,7 +60,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   super_rare: {
     tier: 'super_rare',
     label: 'Super Rare',
-    weight: 6,
+    weight: 2.5,
     colorHex: 0xa855f7,
     badgeCss: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
     xpReward: 180,
@@ -66,7 +68,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   legendary: {
     tier: 'legendary',
     label: 'Legendary',
-    weight: 3,
+    weight: 0.5,
     colorHex: 0xf59e0b,
     badgeCss: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
     xpReward: 400,
@@ -74,7 +76,7 @@ export const RARITY_CONFIGS: Readonly<Record<RarityTier, RarityConfig>> = {
   mega: {
     tier: 'mega',
     label: 'Mega',
-    weight: 1.5,
+    weight: 0,
     colorHex: 0xf43f5e,
     badgeCss: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
     xpReward: 450,
@@ -174,6 +176,54 @@ export class PokemonCreatureCatalog implements ICreatureCatalog {
 
   public getByRarity(rarity: RarityTier): readonly CreatureSpecies[] {
     return this.speciesByRarity.get(rarity) ?? [];
+  }
+
+  public getMegaForms(): readonly CreatureSpecies[] {
+    return this.speciesList.filter((s) => s.formType === 'mega');
+  }
+
+  public findMegaByQuery(query: string): CreatureSpecies | undefined {
+    const q = query.trim().toLowerCase();
+    if (!q) {
+      return undefined;
+    }
+    const megas = this.getMegaForms();
+    const compact = q.replace(/[^a-z0-9]/g, '');
+    const tokens = q.split(/[\s-]+/).filter((t) => t.length > 0);
+
+    const exact = megas.find(
+      (s) =>
+        s.name.toLowerCase() === q ||
+        s.slug === q ||
+        s.slug.replace(/[^a-z0-9]/g, '') === compact,
+    );
+    if (exact) {
+      return exact;
+    }
+
+    const byBasePrefix = megas.find((s) => s.name.toLowerCase().startsWith(`${q}-`));
+    if (byBasePrefix && tokens.length === 1) {
+      return byBasePrefix;
+    }
+
+    if (tokens.length > 1) {
+      const tokenMatch = megas.find((s) => {
+        const lowerName = s.name.toLowerCase();
+        return tokens.every((tok) => lowerName.includes(tok));
+      });
+      if (tokenMatch) {
+        return tokenMatch;
+      }
+    }
+
+    return (
+      byBasePrefix ??
+      megas.find(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          s.slug.replace(/[^a-z0-9]/g, '').includes(compact),
+      )
+    );
   }
 
   public search(query: string, rarity?: RarityTier): readonly CreatureSpecies[] {

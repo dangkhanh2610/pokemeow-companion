@@ -3,6 +3,13 @@ import { BALL_CATALOG, getBallSpec } from '@/game/catalog/ball-catalog';
 import { defaultCreatureCatalog, RARITY_CONFIGS } from '@/game/catalog/creature-catalog';
 import { xpForNextLevel } from '@/game/engine/spawn-engine';
 import type { GuildSettings, GuildToggleState } from '@/game/services/guild-config-service';
+import {
+  MEGA_REQUIRED_LEGENDARIES,
+  MEGA_SACRIFICE_COUNT,
+  type MegaExecuteOutcome,
+  type MegaPreviewOutcome,
+  type MegaProgressSummary,
+} from '@/game/services/mega-service';
 import type { PaginatedDexResult, TrainerBagSummary } from '@/game/services/trainer-service';
 import type {
   BallId,
@@ -478,6 +485,7 @@ export function buildHelpEmbed(prefix: string, botName: string): EmbedBuilder {
         `• \`/bag\` hoặc \`${prefix}bag\` — Xem túi đồ và số dư PokéCoins`,
         `• \`/dex [page] [filter]\` hoặc \`${prefix}dex shiny\` — Xem & lọc Pokédex`,
         `• \`/fav [tên|#mã]\` hoặc \`${prefix}fav\` — Khóa/mở khóa Pokémon yêu thích`,
+        `• \`/mega [tên]\` hoặc \`${prefix}mega rayquaza\` — Thức tỉnh Mega (cần 6 Legend, hiến tế 5)`,
         `• \`/profile\` hoặc \`${prefix}profile\` — Xem hồ sơ huấn luyện viên`,
         `• \`/release\` hoặc \`${prefix}release\` — Thả Pokémon trùng để kiếm thêm PC`,
         `• \`/daily\` hoặc \`${prefix}daily\` — Nhận thưởng điểm danh mỗi 24 giờ`,
@@ -571,4 +579,140 @@ export function buildChannelSettingsEmbed(
       { name: 'Kênh Bị Chặn (Blacklist)', value: blockedText, inline: false },
     )
     .setFooter({ text: `${botName}  ·  Cấu hình server` });
+}
+
+export function buildMegaConfirmRow(
+  ownerUserId: string,
+  megaSpeciesId: number,
+): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`mega:confirm:${ownerUserId}:${megaSpeciesId}`)
+      .setLabel(`Xác nhận Hiến Tế (${MEGA_SACRIFICE_COUNT} Legend)`)
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`mega:cancel:${ownerUserId}`)
+      .setLabel('Hủy nghi thức')
+      .setStyle(ButtonStyle.Secondary),
+  );
+}
+
+export function buildMegaOverviewEmbed(
+  trainerDisplayName: string,
+  progress: MegaProgressSummary,
+  prefix: string,
+): EmbedBuilder {
+  const readyMegas =
+    progress.availableMegas.length > 0
+      ? progress.availableMegas
+          .slice(0, 12)
+          .map((m) => {
+            const shiny = m.baseIsShiny ? '★ ' : '';
+            return `• **${m.megaSpecies.name}** (${shiny}${m.baseBestIv}% IV gốc) — \`${prefix}mega ${m.megaSpecies.name.toLowerCase()}\``;
+          })
+          .join('\n') +
+        (progress.availableMegas.length > 12
+          ? `\n*...và còn ${progress.availableMegas.length - 12} dạng Mega khác sẵn sàng trong kho.*`
+          : '')
+      : 'Bạn chưa sở hữu Pokémon dạng gốc nào có khả năng tiến hóa Mega / Primal.';
+
+  const conditionMet =
+    progress.totalLegendaries >= MEGA_REQUIRED_LEGENDARIES &&
+    progress.sacrificableLegendaries >= MEGA_SACRIFICE_COUNT;
+
+  return new EmbedBuilder()
+    .setColor(0xf43f5e)
+    .setTitle(`Nghi Thức Thức Tỉnh Mega · ${trainerDisplayName}`)
+    .setDescription(
+      [
+        `Mega / Primal **không xuất hiện ngoài tự nhiên** (\`${prefix}p\`), mà phải thức tỉnh từ dạng gốc.`,
+        `**Điều kiện:** Sở hữu Pokémon gốc + đủ **${MEGA_REQUIRED_LEGENDARIES} Legendary**, hiến tế **${MEGA_SACRIFICE_COUNT} con IV thấp nhất** (tự động chừa lại Shiny và Pokémon khóa \`/fav\`).`,
+      ].join('\n'),
+    )
+    .addFields(
+      {
+        name: 'Tiến Độ Legendary',
+        value: `Đang có: **${progress.totalLegendaries} / ${MEGA_REQUIRED_LEGENDARIES}**\nHợp lệ hiến tế: **${progress.sacrificableLegendaries} / ${MEGA_SACRIFICE_COUNT}**`,
+        inline: true,
+      },
+      {
+        name: 'Sở Hữu Mega',
+        value: `**${progress.ownedMegaCount}** Mega / Primal\nTrạng thái: ${conditionMet ? '`SẴN SÀNG`' : '`CHƯA ĐỦ ĐIỀU KIỆN`'}`,
+        inline: true,
+      },
+      {
+        name: 'Dạng Mega Khả Dụng Từ Kho Của Bạn',
+        value: readyMegas,
+        inline: false,
+      },
+    )
+    .setFooter({ text: 'PokeNyan  ·  Dùng /mega <tên> để xem trước & xác nhận hiến tế' });
+}
+
+export function buildMegaConfirmEmbed(
+  trainerDisplayName: string,
+  preview: Extract<MegaPreviewOutcome, { readonly ok: true }>,
+): EmbedBuilder {
+  const shinyTag = preview.baseCreature.isShiny ? '★ SHINY · ' : '';
+  const sacrificeLines = preview.sacrificeList
+    .map(
+      (c, idx) =>
+        `\`${idx + 1}.\` **${c.speciesName}** — **${c.ivPercent}% IV** (\`#${c.id.slice(-6)}\`)`,
+    )
+    .join('\n');
+
+  const spriteUrl = preview.baseCreature.isShiny
+    ? preview.megaSpecies.shinyAnimatedSpriteUrl
+    : preview.megaSpecies.animatedSpriteUrl;
+
+  return new EmbedBuilder()
+    .setColor(0xf43f5e)
+    .setTitle(`Xác Nhận Thức Tỉnh · ${shinyTag}${preview.megaSpecies.name}`)
+    .setDescription(
+      `Huấn luyện viên **${trainerDisplayName}** chuẩn bị nâng cấp **${shinyTag}${preview.baseCreature.speciesName}** (**${preview.baseCreature.ivPercent}% IV**) thành **${preview.megaSpecies.name}** (` +
+        `\`BST ${preview.megaSpecies.baseStats.bst}\`).`,
+    )
+    .addFields(
+      {
+        name: `5 Pokémon Legendary Sẽ Bị Hiến Tế (không thể hoàn tác)`,
+        value: sacrificeLines,
+        inline: false,
+      },
+    )
+    .setThumbnail(spriteUrl)
+    .setFooter({ text: 'PokeNyan  ·  Bấm Xác nhận bên dưới để tiến hành nghi thức' });
+}
+
+export function buildMegaSuccessEmbed(
+  trainerDisplayName: string,
+  result: Extract<MegaExecuteOutcome, { readonly ok: true }>,
+): EmbedBuilder {
+  const shinyTag = result.upgradedCreature.isShiny ? '★ SHINY · ' : '';
+  const spriteUrl = result.upgradedCreature.isShiny
+    ? result.megaSpecies.shinyAnimatedSpriteUrl
+    : result.megaSpecies.animatedSpriteUrl;
+
+  return new EmbedBuilder()
+    .setColor(0xf43f5e)
+    .setTitle(`THỨC TỈNH THÀNH CÔNG · ${shinyTag}${result.megaSpecies.name}`)
+    .setDescription(
+      [
+        `Chúc mừng **${trainerDisplayName}**! Nghi thức hiến tế ${MEGA_SACRIFICE_COUNT} Legendary đã hoàn tất.`,
+        `Pokémon mới **${shinyTag}${result.megaSpecies.name}** (**${result.upgradedCreature.ivPercent}% IV**) đã được tự động khóa Yêu thích (\`♥\`).`,
+      ].join('\n'),
+    )
+    .addFields(
+      {
+        name: 'Hệ & Sức Mạnh',
+        value: `${formatTypeTags(result.megaSpecies.types)}  ·  BST **${result.megaSpecies.baseStats.bst}**`,
+        inline: true,
+      },
+      {
+        name: 'Mã Lưu Trữ',
+        value: `\`#${result.upgradedCreature.id.slice(-6)}\``,
+        inline: true,
+      },
+    )
+    .setImage(spriteUrl)
+    .setFooter({ text: 'PokeNyan  ·  Mega Awakening' });
 }

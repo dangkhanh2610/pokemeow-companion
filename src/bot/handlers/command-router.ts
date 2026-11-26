@@ -15,6 +15,7 @@ import {
   validatePrefix,
 } from '@/game/services/guild-config-service';
 import { leaderboardService } from '@/game/services/leaderboard-service';
+import { megaService } from '@/game/services/mega-service';
 import { trainerService, type TrainerIdentityInput } from '@/game/services/trainer-service';
 import type { BallId, CreatureSpecies, LeaderboardMetric } from '@/game/types';
 import {
@@ -29,6 +30,10 @@ import {
   buildExpiredEncounterEmbed,
   buildHelpEmbed,
   buildLeaderboardEmbed,
+  buildMegaConfirmEmbed,
+  buildMegaConfirmRow,
+  buildMegaOverviewEmbed,
+  buildMegaSuccessEmbed,
   buildPrefixEmbed,
   buildProfileEmbed,
   buildReleaseEmbed,
@@ -449,6 +454,29 @@ export class BotCommandRouter {
         return;
       }
 
+      case 'mega': {
+        await interaction.deferReply();
+        const pokemonQuery = interaction.options.getString('pokemon')?.trim() ?? '';
+        if (!pokemonQuery) {
+          await trainerService.ensureTrainer(meta);
+          const progress = await megaService.getMegaProgress(meta.userId);
+          await interaction.editReply({
+            embeds: [buildMegaOverviewEmbed(meta.displayName, progress, activePrefix)],
+          });
+          return;
+        }
+        const preview = await megaService.previewMegaEvolution(meta, pokemonQuery);
+        if (!preview.ok) {
+          await interaction.editReply(`❌ ${preview.message}`);
+          return;
+        }
+        await interaction.editReply({
+          embeds: [buildMegaConfirmEmbed(meta.displayName, preview)],
+          components: [buildMegaConfirmRow(meta.userId, preview.megaSpecies.id)],
+        });
+        return;
+      }
+
       case 'profile': {
         await interaction.deferReply();
         await trainerService.ensureTrainer(meta);
@@ -741,6 +769,28 @@ export class BotCommandRouter {
         return;
       }
 
+      case 'mega': {
+        const query = parts.slice(1).join(' ').trim();
+        if (!query) {
+          await trainerService.ensureTrainer(meta);
+          const progress = await megaService.getMegaProgress(meta.userId);
+          await message.reply({
+            embeds: [buildMegaOverviewEmbed(meta.displayName, progress, settings.prefix)],
+          });
+          return;
+        }
+        const preview = await megaService.previewMegaEvolution(meta, query);
+        if (!preview.ok) {
+          await message.reply(`❌ ${preview.message}`);
+          return;
+        }
+        await message.reply({
+          embeds: [buildMegaConfirmEmbed(meta.displayName, preview)],
+          components: [buildMegaConfirmRow(meta.userId, preview.megaSpecies.id)],
+        });
+        return;
+      }
+
       case 'profile':
       case 'stats': {
         await trainerService.ensureTrainer(meta);
@@ -781,6 +831,52 @@ export class BotCommandRouter {
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
+    if (interaction.customId.startsWith('mega:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const action = parts[1];
+      const ownerId = parts[2];
+
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: '⚠️ Bạn không thể thao tác nghi thức Mega của huấn luyện viên khác!',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (action === 'cancel') {
+        await interaction.editReply({
+          content: 'Đã hủy nghi thức thức tỉnh Mega.',
+          embeds: [],
+          components: [],
+        });
+        return;
+      }
+
+      if (action === 'confirm') {
+        const megaSpeciesId = Number.parseInt(parts[3] ?? '0', 10);
+        const meta = extractTrainerMeta(interaction.user);
+        const res = await megaService.executeMegaEvolution(
+          meta,
+          megaSpeciesId,
+          `mega:${interaction.id}`,
+        );
+        if (!res.ok) {
+          await interaction.followUp({
+            content: `❌ ${res.message}`,
+            ephemeral: true,
+          });
+          return;
+        }
+        await interaction.editReply({
+          embeds: [buildMegaSuccessEmbed(meta.displayName, res)],
+          components: [],
+        });
+      }
+      return;
+    }
+
     if (interaction.customId.startsWith('dex:')) {
       await interaction.deferUpdate();
       const parts = interaction.customId.split(':');

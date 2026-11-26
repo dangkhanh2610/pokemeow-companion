@@ -77,6 +77,17 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
     .toJSON(),
 
   new SlashCommandBuilder()
+    .setName('mega')
+    .setDescription('Thức tỉnh Mega / Primal bằng cách hiến tế 5/6 Pokémon Legendary')
+    .addStringOption((opt) =>
+      opt
+        .setName('pokemon')
+        .setDescription('Tên Pokémon Mega muốn thức tỉnh (ví dụ: rayquaza, charizard x, lucario)')
+        .setRequired(false),
+    )
+    .toJSON(),
+
+  new SlashCommandBuilder()
     .setName('profile')
     .setDescription('Xem hồ sơ huấn luyện viên, cấp độ và thành tích')
     .toJSON(),

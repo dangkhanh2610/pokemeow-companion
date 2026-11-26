@@ -590,9 +590,16 @@ export function CommunityPortalClient({
                   </div>
 
                   <div className="flex items-center justify-between border-t border-slate-800/80 pt-2.5 text-xs text-slate-300">
-                    <span>
-                      Bắt gốc: <strong className="font-mono">{Math.round(species.baseCatchRate * 100)}%</strong>
-                    </span>
+                    {species.rarity === 'mega' ? (
+                      <span className="font-medium text-rose-300">Hiến tế 5/6 Legend</span>
+                    ) : (
+                      <span>
+                        Bắt gốc:{' '}
+                        <strong className="font-mono">
+                          {Math.round(species.baseCatchRate * 100)}%
+                        </strong>
+                      </span>
+                    )}
                     <span className="inline-flex items-center gap-1 font-mono text-emerald-300">
                       <Coins className="h-3.5 w-3.5" />+{species.baseReward.toLocaleString('en-US')}
                     </span>
