@@ -13,9 +13,16 @@ import {
 } from './trainer-service';
 
 export const WILD_COOLDOWN_MS = 8_000;
-export const ENCOUNTER_TTL_MS = 7_000;
+export const ENCOUNTER_TTL_MS = 10_000;
+export const ENCOUNTER_NETWORK_GRACE_MS = 3_500;
 const RESCUE_COOLDOWN_MS = 30 * 60 * 1000;
 const RESCUE_POKEBALL_GRANT = 3;
+
+class MissingTrainerCacheError extends Error {
+  public constructor(userId: string) {
+    super(`Trainer cache stale for userId=${userId}`);
+  }
+}
 
 export type SpawnEncounterOutcome =
   | {
@@ -59,6 +66,18 @@ function parseCreatureIvs(jsonValue: Prisma.JsonValue): CreatureIVs {
   return { hp: 0, atk: 0, def: 0, spAtk: 0, spDef: 0, spd: 0 };
 }
 
+function buildBallInventoryFromItems(
+  items: readonly { readonly itemId: string; readonly quantity: number }[],
+): Record<BallId, number> {
+  const inventory = emptyBallInventory();
+  for (const item of items) {
+    if (isBallId(item.itemId)) {
+      inventory[item.itemId] = item.quantity;
+    }
+  }
+  return inventory;
+}
+
 export class EncounterService {
   private readonly inFlightSpawns = new Set<string>();
 
@@ -73,156 +92,158 @@ export class EncounterService {
     this.inFlightSpawns.add(userMeta.userId);
     try {
       await trainerService.ensureTrainer(userMeta);
-      const prisma = getPrismaClient();
 
-      return await withDbRetry(() =>
-        prisma.$transaction(async (tx) => {
-          const now = new Date();
-          const trainer = await tx.trainer.findUniqueOrThrow({
-            where: { userId: userMeta.userId },
-          });
-
-          if (trainer.lastWildAt) {
-            const elapsedMs = now.getTime() - trainer.lastWildAt.getTime();
-            if (elapsedMs < WILD_COOLDOWN_MS) {
-              return {
-                ok: false,
-                reason: 'COOLDOWN',
-                remainingMs: WILD_COOLDOWN_MS - elapsedMs,
-              };
-            }
-          }
-
-          await tx.activeEncounter.updateMany({
-            where: {
-              userId: userMeta.userId,
-              status: 'OPEN',
-              expiresAt: { lte: now },
-            },
-            data: { status: 'EXPIRED' },
-          });
-
-          const openEncounter = await tx.activeEncounter.findFirst({
-            where: {
-              userId: userMeta.userId,
-              status: 'OPEN',
-              expiresAt: { gt: now },
-            },
-            orderBy: { createdAt: 'desc' },
-          });
-
-          if (openEncounter) {
-            return {
-              ok: false,
-              reason: 'ACTIVE_ENCOUNTER_EXISTS',
-              species: defaultCreatureCatalog.getById(openEncounter.speciesId),
-            };
-          }
-
-          const roll = defaultSpawnEngine.rollEncounter();
-          const expiresAt = new Date(now.getTime() + ENCOUNTER_TTL_MS);
-
-          const ivsJson: Prisma.InputJsonObject = {
-            hp: roll.ivs.hp,
-            atk: roll.ivs.atk,
-            def: roll.ivs.def,
-            spAtk: roll.ivs.spAtk,
-            spDef: roll.ivs.spDef,
-            spd: roll.ivs.spd,
-          };
-
-          const encounter = await tx.activeEncounter.create({
-            data: {
-              userId: userMeta.userId,
-              channelId,
-              speciesId: roll.species.id,
-              isShiny: roll.isShiny,
-              ivsJson,
-              status: 'OPEN',
-              expiresAt,
-            },
-          });
-
-          const items = await tx.inventoryItem.findMany({
-            where: { userId: userMeta.userId },
-          });
-
-          const ballInventory = emptyBallInventory();
-          for (const item of items) {
-            if (isBallId(item.itemId)) {
-              ballInventory[item.itemId] = item.quantity;
-            }
-          }
-
-          const totalBalls = BALL_CATALOG.reduce(
-            (sum, ball) => sum + ballInventory[ball.id],
-            0,
-          );
-
-          const canRescue =
-            totalBalls === 0 &&
-            trainer.coins < 200 &&
-            (!trainer.lastRescueAt ||
-              now.getTime() - trainer.lastRescueAt.getTime() >= RESCUE_COOLDOWN_MS);
-
-          let rescueGranted = false;
-          if (canRescue) {
-            const rescueBucket = Math.floor(now.getTime() / RESCUE_COOLDOWN_MS);
-            const rescueKey = `rescue:${userMeta.userId}:${rescueBucket}`;
-            const existingRescue = await tx.economyTransaction.findUnique({
-              where: { idempotencyKey: rescueKey },
+      const runSpawnTx = async (): Promise<SpawnEncounterOutcome> => {
+        const prisma = getPrismaClient();
+        return withDbRetry(() =>
+          prisma.$transaction(async (tx) => {
+            const now = new Date();
+            const trainer = await tx.trainer.findUnique({
+              where: { userId: userMeta.userId },
+              include: { inventory: true },
             });
 
-            if (!existingRescue) {
-              await tx.inventoryItem.upsert({
-                where: {
-                  userId_itemId: { userId: userMeta.userId, itemId: 'pokeball' },
-                },
-                update: { quantity: { increment: RESCUE_POKEBALL_GRANT } },
-                create: {
-                  userId: userMeta.userId,
-                  itemId: 'pokeball',
-                  quantity: RESCUE_POKEBALL_GRANT,
-                },
-              });
-
-              const rescueMeta: Prisma.InputJsonObject = {
-                pokeball: RESCUE_POKEBALL_GRANT,
-              };
-
-              await tx.economyTransaction.create({
-                data: {
-                  idempotencyKey: rescueKey,
-                  userId: userMeta.userId,
-                  type: 'RESCUE_GRANT',
-                  coinsDelta: 0,
-                  metadata: rescueMeta,
-                },
-              });
-
-              ballInventory.pokeball += RESCUE_POKEBALL_GRANT;
-              rescueGranted = true;
+            if (!trainer) {
+              throw new MissingTrainerCacheError(userMeta.userId);
             }
-          }
 
-          await tx.trainer.update({
-            where: { userId: userMeta.userId },
-            data: {
-              lastWildAt: now,
-              ...(rescueGranted ? { lastRescueAt: now } : {}),
-            },
-          });
+            if (trainer.lastWildAt) {
+              const elapsedMs = now.getTime() - trainer.lastWildAt.getTime();
+              if (elapsedMs < WILD_COOLDOWN_MS) {
+                return {
+                  ok: false,
+                  reason: 'COOLDOWN',
+                  remainingMs: WILD_COOLDOWN_MS - elapsedMs,
+                };
+              }
+            }
 
-          return {
-            ok: true,
-            encounterId: encounter.id,
-            roll,
-            expiresAt,
-            ballInventory,
-            rescueGranted,
-          };
-        }),
-      );
+            const openEncounter = await tx.activeEncounter.findFirst({
+              where: {
+                userId: userMeta.userId,
+                status: 'OPEN',
+                expiresAt: { gt: now },
+              },
+              orderBy: { createdAt: 'desc' },
+            });
+
+            if (openEncounter) {
+              return {
+                ok: false,
+                reason: 'ACTIVE_ENCOUNTER_EXISTS',
+                species: defaultCreatureCatalog.getById(openEncounter.speciesId),
+              };
+            }
+
+            const roll = defaultSpawnEngine.rollEncounter();
+            const dbExpiresAt = new Date(
+              Date.now() + ENCOUNTER_TTL_MS + ENCOUNTER_NETWORK_GRACE_MS,
+            );
+
+            const ivsJson: Prisma.InputJsonObject = {
+              hp: roll.ivs.hp,
+              atk: roll.ivs.atk,
+              def: roll.ivs.def,
+              spAtk: roll.ivs.spAtk,
+              spDef: roll.ivs.spDef,
+              spd: roll.ivs.spd,
+            };
+
+            const encounter = await tx.activeEncounter.create({
+              data: {
+                userId: userMeta.userId,
+                channelId,
+                speciesId: roll.species.id,
+                isShiny: roll.isShiny,
+                ivsJson,
+                status: 'OPEN',
+                expiresAt: dbExpiresAt,
+              },
+            });
+
+            const ballInventory = buildBallInventoryFromItems(trainer.inventory);
+
+            const totalBalls = BALL_CATALOG.reduce(
+              (sum, ball) => sum + ballInventory[ball.id],
+              0,
+            );
+
+            const canRescue =
+              totalBalls === 0 &&
+              trainer.coins < 200 &&
+              (!trainer.lastRescueAt ||
+                now.getTime() - trainer.lastRescueAt.getTime() >= RESCUE_COOLDOWN_MS);
+
+            let rescueGranted = false;
+            if (canRescue) {
+              const rescueBucket = Math.floor(now.getTime() / RESCUE_COOLDOWN_MS);
+              const rescueKey = `rescue:${userMeta.userId}:${rescueBucket}`;
+              const existingRescue = await tx.economyTransaction.findUnique({
+                where: { idempotencyKey: rescueKey },
+              });
+
+              if (!existingRescue) {
+                await tx.inventoryItem.upsert({
+                  where: {
+                    userId_itemId: { userId: userMeta.userId, itemId: 'pokeball' },
+                  },
+                  update: { quantity: { increment: RESCUE_POKEBALL_GRANT } },
+                  create: {
+                    userId: userMeta.userId,
+                    itemId: 'pokeball',
+                    quantity: RESCUE_POKEBALL_GRANT,
+                  },
+                });
+
+                const rescueMeta: Prisma.InputJsonObject = {
+                  pokeball: RESCUE_POKEBALL_GRANT,
+                };
+
+                await tx.economyTransaction.create({
+                  data: {
+                    idempotencyKey: rescueKey,
+                    userId: userMeta.userId,
+                    type: 'RESCUE_GRANT',
+                    coinsDelta: 0,
+                    metadata: rescueMeta,
+                  },
+                });
+
+                ballInventory.pokeball += RESCUE_POKEBALL_GRANT;
+                rescueGranted = true;
+              }
+            }
+
+            await tx.trainer.update({
+              where: { userId: userMeta.userId },
+              data: {
+                lastWildAt: now,
+                ...(rescueGranted ? { lastRescueAt: now } : {}),
+              },
+            });
+
+            return {
+              ok: true,
+              encounterId: encounter.id,
+              roll,
+              expiresAt: dbExpiresAt,
+              ballInventory,
+              rescueGranted,
+            };
+          }),
+        );
+      };
+
+      try {
+        return await runSpawnTx();
+      } catch (error) {
+        if (error instanceof MissingTrainerCacheError) {
+          trainerService.invalidateTrainerCache(userMeta.userId);
+          await trainerService.ensureTrainer(userMeta);
+          return await runSpawnTx();
+        }
+        throw error;
+      }
     } finally {
       this.inFlightSpawns.delete(userMeta.userId);
     }
@@ -375,6 +396,10 @@ export class EncounterService {
               data: { status: 'CAUGHT' },
             });
 
+            const remainingBalls = buildBallInventoryFromItems(
+              await tx.inventoryItem.findMany({ where: { userId } }),
+            );
+
             return {
               ok: true,
               caught: true,
@@ -390,6 +415,7 @@ export class EncounterService {
               newLevel: updatedTrainer.level,
               leveledUp: xpNext.leveledUp,
               newCoinsBalance: updatedTrainer.coins,
+              remainingBalls,
             };
           }
 
@@ -403,6 +429,10 @@ export class EncounterService {
             data: { status: 'FLED' },
           });
 
+          const remainingBalls = buildBallInventoryFromItems(
+            await tx.inventoryItem.findMany({ where: { userId } }),
+          );
+
           return {
             ok: true,
             caught: false,
@@ -410,6 +440,7 @@ export class EncounterService {
             isShiny: encounter.isShiny,
             ballId,
             catchChance,
+            remainingBalls,
           };
         }),
       );

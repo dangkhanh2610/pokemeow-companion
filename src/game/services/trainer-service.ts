@@ -39,6 +39,11 @@ export interface TrainerBagSummary {
   }[];
 }
 
+export interface ShopWalletSummary {
+  readonly coins: number;
+  readonly balls: Readonly<Record<BallId, number>>;
+}
+
 export interface PaginatedDexResult {
   readonly items: readonly {
     readonly id: string;
@@ -85,6 +90,15 @@ const STARTER_BALLS: Readonly<Record<BallId, number>> = {
 
 const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const STREAK_GRACE_MS = 48 * 60 * 60 * 1000;
+const TRAINER_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_TRAINER_CACHE_SIZE = 2_000;
+
+interface CachedTrainerMeta {
+  readonly username: string;
+  readonly displayName: string;
+  readonly avatarUrl: string;
+  readonly syncedAt: number;
+}
 
 export function emptyBallInventory(): Record<BallId, number> {
   return {
@@ -142,7 +156,42 @@ function buildDexWhereClause(userId: string, rawFilter: string): Prisma.CaughtCr
 }
 
 export class TrainerService {
-  public async ensureTrainer(input: TrainerIdentityInput) {
+  private readonly knownTrainerCache = new Map<string, CachedTrainerMeta>();
+
+  private rememberTrainer(input: TrainerIdentityInput): void {
+    if (
+      !this.knownTrainerCache.has(input.userId) &&
+      this.knownTrainerCache.size >= MAX_TRAINER_CACHE_SIZE
+    ) {
+      const oldestKey = this.knownTrainerCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.knownTrainerCache.delete(oldestKey);
+      }
+    }
+    this.knownTrainerCache.set(input.userId, {
+      username: input.username,
+      displayName: input.displayName,
+      avatarUrl: input.avatarUrl,
+      syncedAt: Date.now(),
+    });
+  }
+
+  public invalidateTrainerCache(userId: string): void {
+    this.knownTrainerCache.delete(userId);
+  }
+
+  public async ensureTrainer(input: TrainerIdentityInput): Promise<void> {
+    const cached = this.knownTrainerCache.get(input.userId);
+    if (
+      cached &&
+      Date.now() - cached.syncedAt < TRAINER_CACHE_TTL_MS &&
+      cached.username === input.username &&
+      cached.displayName === input.displayName &&
+      cached.avatarUrl === input.avatarUrl
+    ) {
+      return;
+    }
+
     const prisma = getPrismaClient();
     const existing = await withDbRetry(() =>
       prisma.trainer.findUnique({
@@ -156,7 +205,7 @@ export class TrainerService {
         existing.displayName !== input.displayName ||
         existing.avatarUrl !== input.avatarUrl
       ) {
-        return withDbRetry(() =>
+        await withDbRetry(() =>
           prisma.trainer.update({
             where: { userId: input.userId },
             data: {
@@ -167,11 +216,12 @@ export class TrainerService {
           }),
         );
       }
-      return existing;
+      this.rememberTrainer(input);
+      return;
     }
 
     try {
-      return await withDbRetry(() =>
+      await withDbRetry(() =>
         prisma.$transaction(async (tx) => {
           const created = await tx.trainer.create({
             data: {
@@ -215,12 +265,46 @@ export class TrainerService {
           return created;
         }),
       );
+      this.rememberTrainer(input);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        return prisma.trainer.findUniqueOrThrow({ where: { userId: input.userId } });
+        await prisma.trainer.findUniqueOrThrow({ where: { userId: input.userId } });
+        this.rememberTrainer(input);
+        return;
       }
       throw error;
     }
+  }
+
+  public async getShopWallet(userId: string): Promise<ShopWalletSummary | null> {
+    const prisma = getPrismaClient();
+    const trainer = await withDbRetry(() =>
+      prisma.trainer.findUnique({
+        where: { userId },
+        select: {
+          coins: true,
+          inventory: {
+            select: { itemId: true, quantity: true },
+          },
+        },
+      }),
+    );
+
+    if (!trainer) {
+      return null;
+    }
+
+    const balls = emptyBallInventory();
+    for (const item of trainer.inventory) {
+      if (isBallId(item.itemId)) {
+        balls[item.itemId] = item.quantity;
+      }
+    }
+
+    return {
+      coins: trainer.coins,
+      balls,
+    };
   }
 
   public async getTrainerProfile(userId: string): Promise<TrainerBagSummary | null> {

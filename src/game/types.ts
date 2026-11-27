@@ -88,6 +88,7 @@ export type ThrowBallOutcome =
       readonly newLevel: number;
       readonly leveledUp: boolean;
       readonly newCoinsBalance: number;
+      readonly remainingBalls?: Readonly<Record<BallId, number>>;
     }
   | {
       readonly ok: true;
@@ -96,6 +97,7 @@ export type ThrowBallOutcome =
       readonly isShiny: boolean;
       readonly ballId: BallId;
       readonly catchChance: number;
+      readonly remainingBalls?: Readonly<Record<BallId, number>>;
     }
   | {
       readonly ok: false;

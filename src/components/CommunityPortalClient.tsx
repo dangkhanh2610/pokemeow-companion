@@ -198,9 +198,9 @@ export function CommunityPortalClient({
         <div className="rpg-card rounded-2xl p-5">
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-xs font-medium uppercase tracking-wider">Shiny Săn Được</span>
-            <Sparkles className="h-4 w-4 text-amber-400" />
+            <Sparkles className="h-4 w-4 text-fuchsia-400" />
           </div>
-          <p className="mt-2 text-3xl font-bold text-amber-300 tabular-nums">
+          <p className="mt-2 text-3xl font-bold text-fuchsia-300 tabular-nums">
             {overview.totalShinies.toLocaleString('en-US')}
           </p>
         </div>
@@ -353,7 +353,7 @@ export function CommunityPortalClient({
                       <td className="py-3 px-3 text-right font-mono text-slate-200 tabular-nums">
                         {entry.totalCatches.toLocaleString('en-US')}
                       </td>
-                      <td className="py-3 px-3 text-right font-mono text-amber-300 tabular-nums">
+                      <td className="py-3 px-3 text-right font-mono text-fuchsia-300 tabular-nums">
                         {entry.shinyCatches.toLocaleString('en-US')}
                       </td>
                       <td className="py-3 pl-3 text-right font-mono text-emerald-300 tabular-nums">
@@ -474,7 +474,7 @@ export function CommunityPortalClient({
                 onClick={() => setShowShiny((prev) => !prev)}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                   showShiny
-                    ? 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/70 shadow-sm shadow-amber-500/20'
+                    ? 'bg-fuchsia-500/25 text-fuchsia-200 ring-1 ring-fuchsia-400/70 shadow-sm shadow-fuchsia-500/20'
                     : 'bg-slate-900/70 text-slate-300 hover:bg-slate-800'
                 }`}
               >
@@ -579,7 +579,7 @@ export function CommunityPortalClient({
                   key={species.id}
                   className={`flex flex-col justify-between rounded-xl border p-4 transition ${
                     showShiny
-                      ? 'border-amber-500/35 bg-slate-900/80 hover:border-amber-400/60'
+                      ? 'border-fuchsia-500/35 bg-slate-900/80 hover:border-fuchsia-400/60'
                       : 'border-slate-800 bg-slate-900/65 hover:border-slate-700'
                   }`}
                 >
@@ -596,7 +596,7 @@ export function CommunityPortalClient({
                         )}
                       </div>
                       <h3 className="truncate text-base font-bold text-white">
-                        {showShiny && <span className="mr-1 text-amber-300">★</span>}
+                        {showShiny && <span className="mr-1 text-fuchsia-300">★</span>}
                         {species.name}
                       </h3>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">

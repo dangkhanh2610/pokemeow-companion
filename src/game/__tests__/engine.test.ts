@@ -4,7 +4,7 @@ import { BALL_CATALOG, getBallSpec, resolveBallId } from '../catalog/ball-catalo
 import { defaultCreatureCatalog, PokemonCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-catalog';
 import { CatchStrategyRegistry } from '../engine/catch-strategy';
 import { applyXp, computeIvSummary, SHINY_CHANCE, SpawnEngine, xpForNextLevel } from '../engine/spawn-engine';
-import { ENCOUNTER_TTL_MS } from '../services/encounter-service';
+import { ENCOUNTER_NETWORK_GRACE_MS, ENCOUNTER_TTL_MS } from '../services/encounter-service';
 import { isChannelAllowed, validatePrefix } from '../services/guild-config-service';
 
 describe('PokéVerse RPG Core Engine', () => {
@@ -62,7 +62,8 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.equal(RARITY_CONFIGS.legendary.weight, 0.05);
     assert.equal(RARITY_CONFIGS.mega.weight, 0);
     assert.equal(SHINY_CHANCE, 1 / 8192);
-    assert.equal(ENCOUNTER_TTL_MS, 7_000);
+    assert.equal(ENCOUNTER_TTL_MS, 10_000);
+    assert.ok(ENCOUNTER_NETWORK_GRACE_MS >= 3_000);
 
     // Đảm bảo SpawnEngine không bao giờ spawn ra Mega ngoài tự nhiên
     for (let i = 0; i < 500; i += 1) {

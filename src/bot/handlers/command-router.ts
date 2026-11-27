@@ -18,6 +18,7 @@ import { leaderboardService } from '@/game/services/leaderboard-service';
 import { megaService } from '@/game/services/mega-service';
 import { trainerService, type TrainerIdentityInput } from '@/game/services/trainer-service';
 import type { BallId, CreatureSpecies, LeaderboardMetric } from '@/game/types';
+import { botEmojiRegistry } from '../emoji-registry';
 import {
   buildBagEmbed,
   buildBotStatusEmbed,
@@ -162,7 +163,7 @@ export class BotCommandRouter {
           // Bỏ qua nếu tin nhắn đã bị xóa hoặc bot mất quyền edit
         }
       })();
-    }, ENCOUNTER_TTL_MS + 500);
+    }, ENCOUNTER_TTL_MS);
     timer.unref();
     this.encounterTimers.set(encounterId, timer);
   }
@@ -208,16 +209,17 @@ export class BotCommandRouter {
     rawItem: string | undefined,
     rawQty: string | undefined,
   ): Promise<void> {
+    const crossIcon = botEmojiRegistry.getCrossMention();
     if (!rawItem) {
       await message.reply(
-        `💡 Cách dùng: \`${serverPrefix}s b <số_mục|mã> [số_lượng]\` — ví dụ: \`${serverPrefix}s b 1 10\` hoặc \`${serverPrefix}b pb 10\``,
+        `Cách dùng: \`${serverPrefix}s b <số_mục|mã> [số_lượng]\` — ví dụ: \`${serverPrefix}s b 1 10\` hoặc \`${serverPrefix}b pb 10\``,
       );
       return;
     }
     const ballId = resolveBallId(rawItem);
     if (!ballId) {
       await message.reply(
-        `❌ Không tìm thấy vật phẩm \`${rawItem}\`. Hỗ trợ mục \`1\`–\`5\` hoặc mã \`pb\`, \`gb\`, \`ub\`, \`prb\`, \`mb\`.`,
+        `${crossIcon} Không tìm thấy vật phẩm \`${rawItem}\`. Hỗ trợ mục \`1\`–\`5\` hoặc mã \`pb\`, \`gb\`, \`ub\`, \`prb\`, \`mb\`.`,
       );
       return;
     }
@@ -229,7 +231,7 @@ export class BotCommandRouter {
       `msg-buy:${message.id}`,
     );
     if (!bought.ok) {
-      await message.reply(`❌ ${bought.message}`);
+      await message.reply(`${crossIcon} ${bought.message}`);
       return;
     }
     await message.reply({
@@ -248,11 +250,13 @@ export class BotCommandRouter {
 
   public async handleSlashCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     const meta = extractTrainerMeta(interaction.user);
+    const crossIcon = botEmojiRegistry.getCrossMention();
+    const timerIcon = botEmojiRegistry.getTimerMention();
 
     if (ADMIN_SLASH_COMMANDS.has(interaction.commandName)) {
       if (!interaction.guildId) {
         await interaction.reply({
-          content: '⚠️ Lệnh quản trị này chỉ dùng trong server Discord.',
+          content: 'Lệnh quản trị này chỉ dùng trong server Discord.',
           ephemeral: true,
         });
         return;
@@ -260,7 +264,7 @@ export class BotCommandRouter {
       if (!this.isAdminOrOwner(interaction.user.id, interaction.memberPermissions)) {
         await interaction.reply({
           content:
-            '🔒 Chỉ Quản trị viên (Admin / Manage Server) mới có quyền dùng lệnh cấu hình này.',
+            `${crossIcon} Chỉ Quản trị viên (Admin / Manage Server) mới có quyền dùng lệnh cấu hình này.`,
           ephemeral: true,
         });
         return;
@@ -312,7 +316,7 @@ export class BotCommandRouter {
         if (!valid) {
           await interaction.reply({
             content:
-              '❌ Prefix không hợp lệ (1–5 ký tự, không có dấu cách, không chứa `<`, `@` hoặc `` ` ``).',
+              `${crossIcon} Prefix không hợp lệ (1–5 ký tự, không có dấu cách, không chứa \`<\`, \`@\` hoặc \`\` \` \`\`).`,
             ephemeral: true,
           });
           return;
@@ -369,14 +373,14 @@ export class BotCommandRouter {
 
       if (!settings.enabled) {
         await interaction.reply({
-          content: '🔴 Bot hiện đang tạm tắt trong server này bởi Quản trị viên.',
+          content: `${crossIcon} Bot hiện đang tạm tắt trong server này bởi Quản trị viên.`,
           ephemeral: true,
         });
         return;
       }
       if (!isChannelAllowed(settings, interaction.channelId)) {
         await interaction.reply({
-          content: '🚫 Kênh này không nằm trong danh sách kênh hoạt động của bot.',
+          content: `${crossIcon} Kênh này không nằm trong danh sách kênh hoạt động của bot.`,
           ephemeral: true,
         });
         return;
@@ -389,26 +393,27 @@ export class BotCommandRouter {
         const result = await encounterService.spawnWildEncounter(meta, interaction.channelId);
         if (!result.ok) {
           if (result.reason === 'SPAWN_IN_FLIGHT') {
-            await interaction.editReply('⏳ Đang xử lý lượt tìm trước đó của bạn...');
+            await interaction.editReply(`${timerIcon} Đang xử lý lượt tìm trước đó của bạn...`);
             return;
           }
           if (result.reason === 'COOLDOWN') {
             const sec = ((result.remainingMs ?? 1000) / 1000).toFixed(1);
-            await interaction.editReply(`⏱️ Bạn đang hồi sức! Chờ **${sec}s** nữa nhé.`);
+            await interaction.editReply(`${timerIcon} Bạn đang hồi sức! Chờ **${sec}s** nữa nhé.`);
             return;
           }
           await interaction.editReply(
-            `⚠️ Bạn đang có một **${result.species?.name ?? 'Pokémon'}** chưa bắt xong! Hãy bấm bóng trên tin nhắn trước đó hoặc đợi hết giờ.`,
+            `${timerIcon} Bạn đang có một **${result.species?.name ?? 'Pokémon'}** chưa bắt xong! Hãy bấm bóng trên tin nhắn trước đó hoặc đợi hết giờ.`,
           );
           return;
         }
+        const displayExpiresAt = new Date(Date.now() + ENCOUNTER_TTL_MS);
         const sentMessage = await interaction.editReply({
           embeds: [
             buildWildEncounterEmbed(
               meta.displayName,
               meta.avatarUrl,
               result.roll,
-              result.expiresAt,
+              displayExpiresAt,
               result.rescueGranted,
             ),
           ],
@@ -425,7 +430,10 @@ export class BotCommandRouter {
       }
 
       case 'shop': {
-        await interaction.reply({ embeds: [buildShopEmbed(activePrefix)] });
+        await interaction.deferReply();
+        await trainerService.ensureTrainer(meta);
+        const wallet = await trainerService.getShopWallet(meta.userId);
+        await interaction.editReply({ embeds: [buildShopEmbed(activePrefix, wallet)] });
         return;
       }
 
@@ -435,7 +443,7 @@ export class BotCommandRouter {
         const ballId = resolveBallId(rawBall);
         const qty = interaction.options.getInteger('quantity') ?? 1;
         if (!ballId) {
-          await interaction.editReply('❌ Loại bóng không hợp lệ.');
+          await interaction.editReply(`${crossIcon} Loại bóng không hợp lệ.`);
           return;
         }
         const bought = await economyService.buyBall(
@@ -445,7 +453,7 @@ export class BotCommandRouter {
           `slash-buy:${interaction.id}`,
         );
         if (!bought.ok) {
-          await interaction.editReply(`❌ ${bought.message}`);
+          await interaction.editReply(`${crossIcon} ${bought.message}`);
           return;
         }
         await interaction.editReply({
@@ -468,10 +476,10 @@ export class BotCommandRouter {
         await trainerService.ensureTrainer(meta);
         const profile = await trainerService.getTrainerProfile(meta.userId);
         if (!profile) {
-          await interaction.editReply('❌ Không tìm thấy dữ liệu túi đồ.');
+          await interaction.editReply(`${crossIcon} Không tìm thấy dữ liệu túi đồ.`);
           return;
         }
-        await interaction.editReply({ embeds: [buildBagEmbed(profile)] });
+        await interaction.editReply({ embeds: [buildBagEmbed(profile, activePrefix)] });
         return;
       }
 
@@ -496,13 +504,14 @@ export class BotCommandRouter {
         const target = interaction.options.getString('target') ?? undefined;
         const res = await trainerService.toggleFavorite(meta, target);
         if (!res.ok) {
-          await interaction.editReply(`❌ ${res.message}`);
+          await interaction.editReply(`${crossIcon} ${res.message}`);
           return;
         }
-        const shiny = res.isShiny ? '★ ' : '';
+        const shiny = res.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
+        const favIcon = botEmojiRegistry.getFavMention();
         const statusText = res.isFavorite
-          ? '♥ Đã thêm vào danh sách Yêu thích (được bảo vệ khỏi `/release`).'
-          : '💔 Đã gỡ khỏi danh sách Yêu thích.';
+          ? `${favIcon} Đã thêm vào danh sách Yêu thích (được bảo vệ khỏi \`/release\`).`
+          : 'Đã gỡ khỏi danh sách Yêu thích.';
         await interaction.editReply(
           `${statusText}\n└ ${shiny}**${res.speciesName}** (${res.ivPercent}% IV · \`#${res.shortId}\`)`,
         );
@@ -522,7 +531,7 @@ export class BotCommandRouter {
         }
         const preview = await megaService.previewMegaEvolution(meta, pokemonQuery);
         if (!preview.ok) {
-          await interaction.editReply(`❌ ${preview.message}`);
+          await interaction.editReply(`${crossIcon} ${preview.message}`);
           return;
         }
         await interaction.editReply({
@@ -537,7 +546,7 @@ export class BotCommandRouter {
         await trainerService.ensureTrainer(meta);
         const profile = await trainerService.getTrainerProfile(meta.userId);
         if (!profile) {
-          await interaction.editReply('❌ Không tìm thấy hồ sơ huấn luyện viên.');
+          await interaction.editReply(`${crossIcon} Không tìm thấy hồ sơ huấn luyện viên.`);
           return;
         }
         await interaction.editReply({ embeds: [buildProfileEmbed(profile)] });
@@ -601,11 +610,13 @@ export class BotCommandRouter {
     const arg1 = parts[1];
     const arg2 = parts[2];
     const meta = extractTrainerMeta(message.author);
+    const crossIcon = botEmojiRegistry.getCrossMention();
+    const timerIcon = botEmojiRegistry.getTimerMention();
 
     if (ADMIN_PREFIX_COMMANDS.has(command)) {
       if (!this.isAdminOrOwner(message.author.id, message.member?.permissions)) {
         await message.reply(
-          '🔒 Chỉ Quản trị viên (Admin / Manage Server) mới có quyền dùng lệnh cấu hình này.',
+          `${crossIcon} Chỉ Quản trị viên (Admin / Manage Server) mới có quyền dùng lệnh cấu hình này.`,
         );
         return;
       }
@@ -646,7 +657,7 @@ export class BotCommandRouter {
         const valid = validatePrefix(arg1);
         if (!valid) {
           await message.reply(
-            '❌ Prefix không hợp lệ (1–5 ký tự, không có dấu cách, không chứa `<`, `@` hoặc `` ` ``).',
+            `${crossIcon} Prefix không hợp lệ (1–5 ký tự, không có dấu cách, không chứa \`<\`, \`@\` hoặc \`\` \` \`\`).`,
           );
           return;
         }
@@ -663,7 +674,7 @@ export class BotCommandRouter {
 
         if (sub === 'allow') {
           if (!targetId) {
-            await message.reply('❌ Kênh không hợp lệ. Ví dụ: `channel allow #pokenyan`');
+            await message.reply(`${crossIcon} Kênh không hợp lệ. Ví dụ: \`channel allow #pokenyan\``);
             return;
           }
           const updated = await guildConfigService.allowChannel(message.guild.id, targetId);
@@ -672,7 +683,7 @@ export class BotCommandRouter {
         }
         if (sub === 'block') {
           if (!targetId) {
-            await message.reply('❌ Kênh không hợp lệ. Ví dụ: `channel block #general`');
+            await message.reply(`${crossIcon} Kênh không hợp lệ. Ví dụ: \`channel block #general\``);
             return;
           }
           const updated = await guildConfigService.blockChannel(message.guild.id, targetId);
@@ -703,21 +714,22 @@ export class BotCommandRouter {
           }
           if (result.reason === 'COOLDOWN') {
             const sec = ((result.remainingMs ?? 1000) / 1000).toFixed(1);
-            await message.reply(`⏱️ Bạn đang hồi sức! Chờ **${sec}s** nữa nhé.`);
+            await message.reply(`${timerIcon} Bạn đang hồi sức! Chờ **${sec}s** nữa nhé.`);
             return;
           }
           await message.reply(
-            `⚠️ Bạn đang có một **${result.species?.name ?? 'Pokémon'}** chưa bắt xong! Hãy bấm bóng hoặc đợi hết giờ.`,
+            `${timerIcon} Bạn đang có một **${result.species?.name ?? 'Pokémon'}** chưa bắt xong! Hãy bấm bóng hoặc đợi hết giờ.`,
           );
           return;
         }
+        const displayExpiresAt = new Date(Date.now() + ENCOUNTER_TTL_MS);
         const sentMessage = await message.reply({
           embeds: [
             buildWildEncounterEmbed(
               meta.displayName,
               meta.avatarUrl,
               result.roll,
-              result.expiresAt,
+              displayExpiresAt,
               result.rescueGranted,
             ),
           ],
@@ -740,7 +752,9 @@ export class BotCommandRouter {
           await this.executePrefixBuy(message, meta, settings.prefix, arg2, parts[3]);
           return;
         }
-        await message.reply({ embeds: [buildShopEmbed(settings.prefix)] });
+        await trainerService.ensureTrainer(meta);
+        const wallet = await trainerService.getShopWallet(meta.userId);
+        await message.reply({ embeds: [buildShopEmbed(settings.prefix, wallet)] });
         return;
       }
 
@@ -752,13 +766,16 @@ export class BotCommandRouter {
 
       case 'i':
       case 'inv':
-      case 'bag': {
+      case 'bag':
+      case 'bal':
+      case 'coins':
+      case 'money': {
         await trainerService.ensureTrainer(meta);
         const profile = await trainerService.getTrainerProfile(meta.userId);
         if (!profile) {
           return;
         }
-        await message.reply({ embeds: [buildBagEmbed(profile)] });
+        await message.reply({ embeds: [buildBagEmbed(profile, settings.prefix)] });
         return;
       }
 
@@ -795,13 +812,14 @@ export class BotCommandRouter {
         const target = parts.slice(1).join(' ') || undefined;
         const res = await trainerService.toggleFavorite(meta, target);
         if (!res.ok) {
-          await message.reply(`❌ ${res.message}`);
+          await message.reply(`${crossIcon} ${res.message}`);
           return;
         }
-        const shiny = res.isShiny ? '★ ' : '';
+        const shiny = res.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
+        const favIcon = botEmojiRegistry.getFavMention();
         const statusText = res.isFavorite
-          ? '♥ Đã thêm vào danh sách Yêu thích (bảo vệ khỏi `release`).'
-          : '💔 Đã gỡ khỏi danh sách Yêu thích.';
+          ? `${favIcon} Đã thêm vào danh sách Yêu thích (bảo vệ khỏi \`release\`).`
+          : 'Đã gỡ khỏi danh sách Yêu thích.';
         await message.reply(
           `${statusText}\n└ ${shiny}**${res.speciesName}** (${res.ivPercent}% IV · \`#${res.shortId}\`)`,
         );
@@ -821,7 +839,7 @@ export class BotCommandRouter {
         }
         const preview = await megaService.previewMegaEvolution(meta, query);
         if (!preview.ok) {
-          await message.reply(`❌ ${preview.message}`);
+          await message.reply(`${crossIcon} ${preview.message}`);
           return;
         }
         await message.reply({
@@ -876,6 +894,9 @@ export class BotCommandRouter {
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
+    const crossIcon = botEmojiRegistry.getCrossMention();
+    const timerIcon = botEmojiRegistry.getTimerMention();
+
     if (interaction.customId.startsWith('mega:')) {
       await interaction.deferUpdate();
       const parts = interaction.customId.split(':');
@@ -884,7 +905,7 @@ export class BotCommandRouter {
 
       if (!ownerId || ownerId !== interaction.user.id) {
         await interaction.followUp({
-          content: '⚠️ Bạn không thể thao tác nghi thức Mega của huấn luyện viên khác!',
+          content: `${crossIcon} Bạn không thể thao tác nghi thức Mega của huấn luyện viên khác!`,
           ephemeral: true,
         });
         return;
@@ -909,7 +930,7 @@ export class BotCommandRouter {
         );
         if (!res.ok) {
           await interaction.followUp({
-            content: `❌ ${res.message}`,
+            content: `${crossIcon} ${res.message}`,
             ephemeral: true,
           });
           return;
@@ -931,7 +952,7 @@ export class BotCommandRouter {
 
       if (!ownerId || ownerId !== interaction.user.id) {
         await interaction.followUp({
-          content: '⚠️ Bạn không thể lật trang Pokédex của huấn luyện viên khác!',
+          content: `${crossIcon} Bạn không thể lật trang Pokédex của huấn luyện viên khác!`,
           ephemeral: true,
         });
         return;
@@ -968,14 +989,14 @@ export class BotCommandRouter {
       );
       if (!settings.enabled) {
         await interaction.followUp({
-          content: '🔴 Bot hiện đang tạm tắt trong server này bởi Quản trị viên.',
+          content: `${crossIcon} Bot hiện đang tạm tắt trong server này bởi Quản trị viên.`,
           ephemeral: true,
         });
         return;
       }
       if (!isChannelAllowed(settings, interaction.channelId)) {
         await interaction.followUp({
-          content: '🚫 Kênh này không nằm trong danh sách kênh hoạt động của bot.',
+          content: `${crossIcon} Kênh này không nằm trong danh sách kênh hoạt động của bot.`,
           ephemeral: true,
         });
         return;
@@ -1003,7 +1024,7 @@ export class BotCommandRouter {
 
     if (!outcome.ok) {
       await interaction.followUp({
-        content: `⚠️ ${outcome.message}`,
+        content: `${timerIcon} ${outcome.message}`,
         ephemeral: true,
       });
       return;
@@ -1025,16 +1046,13 @@ export class BotCommandRouter {
       components: [buildCatchButtonsRow(encounterId, emptyInventory, true)],
     });
 
-    const [, profile] = await Promise.all([
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, 1650);
-      }),
-      trainerService.getTrainerProfile(interaction.user.id),
-    ]);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1150);
+    });
 
     await interaction.editReply({
       embeds: [buildCatchResultEmbed(meta.displayName, outcome)],
-      components: [buildCatchButtonsRow(encounterId, profile?.balls ?? emptyInventory, true)],
+      components: [buildCatchButtonsRow(encounterId, outcome.remainingBalls ?? emptyInventory, true)],
     });
   }
 }

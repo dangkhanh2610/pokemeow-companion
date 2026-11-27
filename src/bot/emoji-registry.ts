@@ -18,7 +18,9 @@ export interface StoredAppEmoji {
 const EMOJI_PREFIX = 'pn_';
 const SHAKE_PREFIX = 'pn_shake_';
 const TYPE_PREFIX = 'pn_type_';
-const RARITY_PREFIX = 'pn_rar_';
+const RARITY_PREFIX = 'pn_r3_';
+const LEGACY_RARITY_PREFIXES: readonly string[] = ['pn_rar_', 'pn_r2_'];
+const UI_PREFIX = 'pn_ui_';
 const LEGACY_PREFIX = 'pv_';
 
 const TYPE_SLUGS: readonly string[] = [
@@ -52,11 +54,16 @@ const RARITY_KEYS: readonly (RarityTier | 'shiny')[] = [
   'shiny',
 ];
 
+export type UiIconKey = 'coin' | 'check' | 'cross' | 'timer' | 'fav';
+
+const UI_KEYS: readonly UiIconKey[] = ['coin', 'check', 'cross', 'timer', 'fav'];
+
 export class EmojiRegistry {
   private readonly staticEmojis = new Map<BallId, StoredAppEmoji>();
   private readonly shakeEmojis = new Map<BallId, StoredAppEmoji>();
   private readonly typeEmojis = new Map<string, StoredAppEmoji>();
   private readonly rarityEmojis = new Map<string, StoredAppEmoji>();
+  private readonly uiEmojis = new Map<UiIconKey, StoredAppEmoji>();
 
   public async syncAndLoad(token: string, clientId: string): Promise<void> {
     const rest = new REST({ version: '10' }).setToken(token);
@@ -85,13 +92,23 @@ export class EmojiRegistry {
       }
     }
 
-    // Dọn emoji cũ pv_* nếu còn
+    // Dọn emoji cũ pv_* và pn_rar_* nếu còn
     for (const ball of BALL_CATALOG) {
       const legacy = byName.get(`${LEGACY_PREFIX}${ball.id}`);
       if (legacy) {
         await rest
           .delete(`/applications/${clientId}/emojis/${legacy.id}` as `/${string}`)
           .catch(() => undefined);
+      }
+    }
+    for (const prefix of LEGACY_RARITY_PREFIXES) {
+      for (const rarityKey of RARITY_KEYS) {
+        const legacy = byName.get(`${prefix}${rarityKey}`);
+        if (legacy) {
+          await rest
+            .delete(`/applications/${clientId}/emojis/${legacy.id}` as `/${string}`)
+            .catch(() => undefined);
+        }
       }
     }
 
@@ -197,6 +214,31 @@ export class EmojiRegistry {
         );
       }
     }
+
+    // 5) Sync 5 Game UI Icons
+    for (const uiKey of UI_KEYS) {
+      const targetName = `${UI_PREFIX}${uiKey}`;
+      const existing = byName.get(targetName);
+      if (existing) {
+        this.uiEmojis.set(uiKey, existing);
+        continue;
+      }
+
+      try {
+        const pngPath = resolve(process.cwd(), 'public', 'ui', `ui_${uiKey}.png`);
+        const buffer = await readFile(pngPath);
+        const created = await this.uploadEmoji(rest, route, targetName, 'image/png', buffer);
+        if (created) {
+          this.uiEmojis.set(uiKey, created);
+          console.log(`[EmojiRegistry] Đã tải lên UI Icon: :${created.name}:`);
+        }
+      } catch (error) {
+        console.warn(
+          `[EmojiRegistry] Không thể upload UI icon ${uiKey}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
   }
 
   private async uploadEmoji(
@@ -282,6 +324,34 @@ export class EmojiRegistry {
       return `<:${entry.name}:${entry.id}>`;
     }
     return '★';
+  }
+
+  public getUiMention(key: UiIconKey, fallback: string): string {
+    const entry = this.uiEmojis.get(key);
+    if (entry) {
+      return `<:${entry.name}:${entry.id}>`;
+    }
+    return fallback;
+  }
+
+  public getCoinMention(): string {
+    return this.getUiMention('coin', 'PC');
+  }
+
+  public getCheckMention(): string {
+    return this.getUiMention('check', '[OK]');
+  }
+
+  public getCrossMention(): string {
+    return this.getUiMention('cross', '[X]');
+  }
+
+  public getTimerMention(): string {
+    return this.getUiMention('timer', '[!]');
+  }
+
+  public getFavMention(): string {
+    return this.getUiMention('fav', '♥');
   }
 }
 
