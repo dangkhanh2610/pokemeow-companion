@@ -1,4 +1,10 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  StringSelectMenuBuilder,
+} from 'discord.js';
 import { BALL_CATALOG, getBallSpec } from '@/game/catalog/ball-catalog';
 import { defaultCreatureCatalog, RARITY_CONFIGS } from '@/game/catalog/creature-catalog';
 import { xpForNextLevel } from '@/game/engine/spawn-engine';
@@ -10,10 +16,12 @@ import {
   type MegaPreviewOutcome,
   type MegaProgressSummary,
 } from '@/game/services/mega-service';
-import type {
-  PaginatedDexResult,
-  ShopWalletSummary,
-  TrainerBagSummary,
+import {
+  BOX_SORT_LABELS,
+  type BoxSortMode,
+  type PaginatedBoxResult,
+  type ShopWalletSummary,
+  type TrainerBagSummary,
 } from '@/game/services/trainer-service';
 import type {
   BallId,
@@ -131,26 +139,55 @@ export function buildCatchButtonsRow(
   return new ActionRowBuilder<ButtonBuilder>().addComponents(buttons);
 }
 
-export function buildDexPaginationRow(
-  ownerUserId: string,
-  filter: string,
-  page: number,
-  totalPages: number,
-): ActionRowBuilder<ButtonBuilder> {
-  const encodedFilter = encodeURIComponent(filter).slice(0, 40);
+export type BoxActionRow =
+  | ActionRowBuilder<StringSelectMenuBuilder>
+  | ActionRowBuilder<ButtonBuilder>;
 
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+export function buildBoxComponents(
+  ownerUserId: string,
+  box: PaginatedBoxResult,
+): BoxActionRow[] {
+  const encodedFilter = encodeURIComponent(box.filter).slice(0, 40);
+  const sortOptions = (Object.keys(BOX_SORT_LABELS) as BoxSortMode[]).map((mode) => ({
+    label: BOX_SORT_LABELS[mode],
+    value: mode,
+    default: mode === box.sort,
+  }));
+
+  const selectRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`boxsort:${ownerUserId}:${encodedFilter}`)
+      .setPlaceholder('Đổi kiểu sắp xếp Box...')
+      .addOptions(sortOptions),
+  );
+
+  if (box.totalPages <= 1) {
+    return [selectRow];
+  }
+
+  const pageRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`dex:${ownerUserId}:${Math.max(1, page - 1)}:${encodedFilter}`)
+      .setCustomId(
+        `boxpage:${ownerUserId}:${Math.max(1, box.page - 1)}:${box.sort}:${encodedFilter}`,
+      )
       .setLabel('◀ Trước')
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(page <= 1),
+      .setDisabled(box.page <= 1),
     new ButtonBuilder()
-      .setCustomId(`dex:${ownerUserId}:${Math.min(totalPages, page + 1)}:${encodedFilter}`)
+      .setCustomId(`boxnoop:${ownerUserId}`)
+      .setLabel(`Trang ${box.page}/${box.totalPages}`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId(
+        `boxpage:${ownerUserId}:${Math.min(box.totalPages, box.page + 1)}:${box.sort}:${encodedFilter}`,
+      )
       .setLabel('Sau ▶')
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(page >= totalPages),
+      .setDisabled(box.page >= box.totalPages),
   );
+
+  return [selectRow, pageRow];
 }
 
 export function buildWildEncounterEmbed(
@@ -471,7 +508,7 @@ export function buildBagEmbed(summary: TrainerBagSummary, prefix = ';'): EmbedBu
     )
     .setThumbnail(summary.avatarUrl || null)
     .setFooter({
-      text: `Dùng ${prefix}s để mua bóng  ·  ${prefix}d để xem Pokédex  ·  ${prefix}r để thả trùng`,
+      text: `Dùng ${prefix}s để mua bóng  ·  ${prefix}box để xem kho Pokémon  ·  ${prefix}r để thả trùng`,
     });
 }
 
@@ -518,7 +555,7 @@ export function buildProfileEmbed(summary: TrainerBagSummary): EmbedBuilder {
       },
       {
         name: 'Thành Tích & Đấu Trường',
-        value: `Đã bắt: **${formatNumber(summary.totalCatches)}** (${catchRate}%) · ${shinyIcon} **${summary.shinyCatches}** · Loài: **${summary.uniqueSpeciesCount}/${defaultCreatureCatalog.getAll().length}**\nHuy hiệu Gym: **${summary.gymBadges.length}/8**  ·  Thắng trận: **${formatNumber(summary.battleWins)}**\nBuddy: ${buddyText}`,
+        value: `Đã bắt: **${formatNumber(summary.totalCatches)}** (${catchRate}%) · ${shinyIcon} **${summary.shinyCatches}** · Loài: **${summary.uniqueSpeciesCount}/${defaultCreatureCatalog.getAll().length}**\nHuy hiệu Gym: **${summary.officialGymBadgeCount}/8**  ·  Thắng trận: **${formatNumber(summary.battleWins)}**\nBuddy: ${buddyText}`,
         inline: false,
       },
       {
@@ -530,39 +567,48 @@ export function buildProfileEmbed(summary: TrainerBagSummary): EmbedBuilder {
     .setFooter({ text: 'PokeNyan  ·  Hồ sơ huấn luyện viên' });
 }
 
-export function buildDexEmbed(
+export function buildBoxEmbed(
   trainerDisplayName: string,
-  dex: PaginatedDexResult,
+  box: PaginatedBoxResult,
+  prefix = ';',
 ): EmbedBuilder {
   const shinyIcon = botEmojiRegistry.getShinyMention();
   const favIcon = botEmojiRegistry.getFavMention();
-  const filterBadge = dex.filter ? `  [${dex.filter.toUpperCase()}]` : '';
-  const lines =
-    dex.items.length > 0
-      ? dex.items.map((item, index) => {
-          const globalIndex = (dex.page - 1) * 10 + index + 1;
-          const species = defaultCreatureCatalog.getById(item.speciesId);
-          const dexNo = species?.dexNumber ?? item.speciesId;
+  const filterBadge = box.filter ? `  [${box.filter.toUpperCase()}]` : '';
+  const headerLine = `Sắp xếp: **${BOX_SORT_LABELS[box.sort]}**  ·  Tổng: **${formatNumber(box.totalCount)}** Pokémon`;
+
+  const itemLines =
+    box.items.length > 0
+      ? box.items.map((item, index) => {
+          const globalIndex = (box.page - 1) * 10 + index + 1;
           const shiny = item.isShiny ? `${shinyIcon} ` : '';
           const fav = item.isFavorite ? `${favIcon} ` : '';
           const rarIcon = isRarityTier(item.rarity)
             ? `${botEmojiRegistry.getRarityMention(item.rarity)} `
             : '';
           const shortId = item.id.slice(-6);
-          return `\`${globalIndex}.\` ${fav}${rarIcon}${shiny}**${item.speciesName}** \`${formatDexNo(dexNo)}\` — **${item.ivPercent}% IV** · \`#${shortId}\``;
+          const tags: string[] = [];
+          if (box.buddyCreatureId === item.id) {
+            tags.push('Buddy');
+          }
+          if (item.inMarket) {
+            tags.push('Chợ/Trade');
+          }
+          const tagSuffix = tags.length > 0 ? ` · \`${tags.join(' | ')}\`` : '';
+          return `\`${globalIndex}.\` ${fav}${rarIcon}${shiny}**${item.speciesName}** \`Lv.${item.level}\` — **${item.ivPercent}% IV** · \`#${shortId}\`${tagSuffix}`;
         })
       : [
-          dex.filter
-            ? `Không có Pokémon nào khớp bộ lọc \`${dex.filter}\`.`
-            : 'Kho Pokémon của bạn đang trống. Dùng `;p` hoặc `/p` để bắt Pokémon đầu tiên!',
+          box.filter
+            ? `Không có Pokémon nào khớp bộ lọc \`${box.filter}\`.`
+            : `Kho Pokémon của bạn đang trống. Dùng \`${prefix}p\` hoặc \`/p\` để bắt Pokémon đầu tiên!`,
         ];
 
   return new EmbedBuilder()
     .setColor(0x14b8a6)
-    .setTitle(`Pokédex · ${trainerDisplayName}${filterBadge}`)
-    .setDescription(lines.join('\n'))
+    .setTitle(`Kho Pokémon (Box) · ${trainerDisplayName}${filterBadge}`)
+    .setDescription(`${headerLine}\n\n${itemLines.join('\n')}`)
     .setFooter({
-      text: `Trang ${dex.page}/${dex.totalPages}  ·  ${dex.totalCount} Pokémon  ·  Dùng ;f <#mã> để khóa yêu thích`,
+      text: `Trang ${box.page}/${box.totalPages}  ·  Soi chỉ số: ${prefix}info <số|#mã>  ·  Khóa: ${prefix}fav <#mã>`,
     });
 }
 
@@ -681,7 +727,8 @@ export function buildHelpEmbed(prefix: string, botName: string): EmbedBuilder {
           `• \`${prefix}bd\` / \`/buddy\` — Chọn & luyện Buddy (+4% bắt, +15% XP)`,
           `• \`${prefix}info [tên|số|#mã]\` / \`${prefix}v\` / \`/info\` — Xem chỉ số, IV & 4 skill Pokémon`,
           `• \`${prefix}ev\` / \`/evolve\` — Tiến hóa Pokémon khi đủ cấp độ`,
-          `• \`${prefix}d [lọc]\` / \`${prefix}fav [#mã]\` — Xem Pokédex & khóa yêu thích`,
+          `• \`${prefix}box [sort|lọc]\` / \`/box\` — Xem kho Pokémon (mặc định theo Độ hiếm)`,
+          `• \`${prefix}d <tên>\` / \`${prefix}fav [#mã]\` — Tra Pokédex & khóa yêu thích`,
           `• \`${prefix}m [tên]\` / \`/mega\` — Nghi thức hiến tế 5/6 Legend lên Mega`,
         ].join('\n'),
         inline: false,
@@ -694,7 +741,8 @@ export function buildHelpEmbed(prefix: string, botName: string): EmbedBuilder {
           `• \`${prefix}i\` / \`${prefix}bal\` / \`${prefix}pf\` — Túi đồ, số dư PC & hồ sơ`,
           `• \`${prefix}mk\` / \`/market\` — Chợ mua bán Pokémon (\`${prefix}mk sell\`, \`${prefix}mk buy\`)`,
           `• \`${prefix}tr\` / \`/trade\` — Trao đổi 2 bước an toàn với người chơi khác`,
-          `• \`${prefix}bt [gym|@user]\` / \`${prefix}gym\` — Đấu theo lượt PvE / 8 Gym / PvP`,
+          `• \`${prefix}bt [gym|@user]\` / \`${prefix}gym [số]\` — Chọn Challenger / Đấu 8 Gym / PvP`,
+          `• \`${prefix}ms [tên]\` / \`/moves\` — Shop Kỹ Năng riêng cho từng Pokémon (mở ô 3 & 4)`,
           `• \`${prefix}r\` / \`${prefix}dl\` / \`${prefix}lb\` — Thả trùng, điểm danh & BXH`,
         ].join('\n'),
         inline: false,
@@ -766,7 +814,7 @@ export function buildPrefixEmbed(
     .setDescription(
       [
         `${header}: \`${prefix}\``,
-        `Ví dụ dùng lệnh: \`${prefix}p\`, \`${prefix}s b 1 10\`, \`${prefix}d shiny\`, hoặc tag \`@${botName} p\`.`,
+        `Ví dụ dùng lệnh: \`${prefix}p\`, \`${prefix}s b 1 10\`, \`${prefix}box iv\`, hoặc tag \`@${botName} p\`.`,
       ].join('\n'),
     )
     .setFooter({ text: `${botName}  ·  Cấu hình server` });

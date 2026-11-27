@@ -63,9 +63,11 @@ model CaughtCreature {
   level       Int      @default(1)
   xp          Int      @default(0)
   ballUsed    String
-  isFavorite  Boolean  @default(false)
-  inMarket    Boolean  @default(false)
-  released    Boolean  @default(false)
+  isFavorite    Boolean  @default(false)
+  inMarket      Boolean  @default(false)
+  unlockedMoves String[] @default([])
+  equippedMoves String[] @default([])
+  released      Boolean  @default(false)
   caughtAt    DateTime @default(now())
   trainer     Trainer  @relation(fields: [userId], references: [userId], onDelete: Cascade)
 

@@ -48,20 +48,37 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
     .toJSON(),
 
   new SlashCommandBuilder()
-    .setName('dex')
-    .setDescription('Xem bộ sưu tập Pokémon bạn đã bắt được')
+    .setName('box')
+    .setDescription('Xem kho Pokémon đã bắt (mặc định sắp xếp theo Độ hiếm Rarity)')
+    .addStringOption((opt) =>
+      opt
+        .setName('sort')
+        .setDescription('Kiểu sắp xếp danh sách Pokémon')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Độ hiếm (Rarity - Mặc định)', value: 'rarity' },
+          { name: 'IV cao → thấp', value: 'iv' },
+          { name: 'IV thấp → cao', value: 'iv_asc' },
+          { name: 'Cấp độ cao → thấp (Level)', value: 'level' },
+          { name: 'Lực chiến (CP)', value: 'cp' },
+          { name: 'Mới bắt nhất (Recent)', value: 'recent' },
+          { name: 'Cũ nhất (Oldest)', value: 'oldest' },
+          { name: 'Số Pokédex (#Dex)', value: 'dex' },
+          { name: 'Tên A → Z', value: 'name' },
+        ),
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName('filter')
+        .setDescription('Lọc theo shiny, fav, dups, legendary, hệ (fire, water...) hoặc tên Pokémon')
+        .setRequired(false),
+    )
     .addIntegerOption((opt) =>
       opt
         .setName('page')
         .setDescription('Số trang muốn xem')
         .setRequired(false)
         .setMinValue(1),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('filter')
-        .setDescription('Lọc theo shiny, mega, fav, legendary, super_rare, rare hoặc tên Pokémon')
-        .setRequired(false),
     )
     .toJSON(),
 
@@ -371,21 +388,21 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
 
   new SlashCommandBuilder()
     .setName('battle')
-    .setDescription('Đấu trường Pokémon theo lượt (PvE hoang dã, 8 Gym Leader, PvP)')
+    .setDescription('Đấu trường Pokémon theo lượt (PvE hoang dã, Challengers & 8 Gym, PvP)')
     .addSubcommand((sub) =>
       sub.setName('pve').setDescription('Đánh theo lượt với Pokémon hoang dã kiếm PC & XP cho Buddy'),
     )
     .addSubcommand((sub) =>
       sub
         .setName('gym')
-        .setDescription('Khiêu chiến Thủ lĩnh Gym Kanto (1 - 8) lấy Huy hiệu & Master Ball')
+        .setDescription('Mở danh sách Challengers / Gym Kanto để chọn đối thủ hoặc thách đấu ngay')
         .addIntegerOption((opt) =>
           opt
             .setName('stage')
-            .setDescription('Tầng Gym (1 - 8). Bỏ trống = Gym tiếp theo của bạn')
+            .setDescription('Số thứ tự Challenger (1 - 12). Bỏ trống = mở menu chọn đối thủ')
             .setRequired(false)
             .setMinValue(1)
-            .setMaxValue(8),
+            .setMaxValue(12),
         ),
     )
     .addSubcommand((sub) =>
@@ -397,7 +414,73 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
         ),
     )
     .addSubcommand((sub) =>
-      sub.setName('list').setDescription('Xem danh sách 8 Gym Leader và tiến độ Huy hiệu của bạn'),
+      sub.setName('list').setDescription('Xem danh sách 12 Challengers & 8 Gym Leader để chọn đấu'),
+    )
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('moves')
+    .setDescription('Cửa hàng kỹ năng riêng cho từng Pokémon (mở rộng từ 2 lên 4 skill chiến đấu)')
+    .addSubcommand((sub) =>
+      sub
+        .setName('view')
+        .setDescription('Xem bộ chiêu hiện tại & shop kỹ năng riêng của Pokémon')
+        .addStringOption((opt) =>
+          opt
+            .setName('pokemon')
+            .setDescription('Tên, số kho (;box) hoặc #mã Pokémon (bỏ trống = Buddy)')
+            .setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('buy')
+        .setDescription('Mua một kỹ năng trong Shop Kỹ Năng riêng của Pokémon')
+        .addStringOption((opt) =>
+          opt
+            .setName('move')
+            .setDescription('Số thứ tự (1 - 8) hoặc tên chiêu trong shop (vd: 1, Flamethrower)')
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('pokemon')
+            .setDescription('Tên, số kho hoặc #mã Pokémon (bỏ trống = Buddy)')
+            .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('slot')
+            .setDescription('Ô muốn lắp vào ngay (1 - 4). Bỏ trống = tự lắp vào ô 3/4')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(4),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('equip')
+        .setDescription('Sắp xếp lại chiêu đã mở khóa vào ô 1 - 4 để mang đi đấu')
+        .addStringOption((opt) =>
+          opt
+            .setName('move')
+            .setDescription('Số thứ tự shop hoặc tên chiêu đã mở khóa')
+            .setRequired(true),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('slot')
+            .setDescription('Vị trí ô chiến đấu (1 - 4)')
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(4),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('pokemon')
+            .setDescription('Tên, số kho hoặc #mã Pokémon (bỏ trống = Buddy)')
+            .setRequired(false),
+        ),
     )
     .toJSON(),
 
@@ -418,7 +501,7 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
     .addStringOption((opt) =>
       opt
         .setName('pokemon')
-        .setDescription('Tên Pokémon, số thứ tự kho (;d), #mã ngắn hoặc loài bất kỳ (bỏ trống = Buddy)')
+        .setDescription('Tên Pokémon, số thứ tự kho (;box), #mã ngắn hoặc loài bất kỳ (bỏ trống = Buddy)')
         .setRequired(false),
     )
     .toJSON(),

@@ -21,6 +21,7 @@ const TYPE_PREFIX = 'pn_type_';
 const RARITY_PREFIX = 'pn_r3_';
 const LEGACY_RARITY_PREFIXES: readonly string[] = ['pn_rar_', 'pn_r2_'];
 const UI_PREFIX = 'pn_ui_';
+const HP_PREFIX = 'pn_hp_';
 const LEGACY_PREFIX = 'pv_';
 
 const TYPE_SLUGS: readonly string[] = [
@@ -58,12 +59,42 @@ export type UiIconKey = 'coin' | 'check' | 'cross' | 'timer' | 'fav';
 
 const UI_KEYS: readonly UiIconKey[] = ['coin', 'check', 'cross', 'timer', 'fav'];
 
+export type HpBarSlotKey =
+  | 'l_g'
+  | 'm_g'
+  | 'r_g'
+  | 'l_y'
+  | 'm_y'
+  | 'r_y'
+  | 'l_r'
+  | 'm_r'
+  | 'r_r'
+  | 'l_e'
+  | 'm_e'
+  | 'r_e';
+
+const HP_BAR_KEYS: readonly HpBarSlotKey[] = [
+  'l_g',
+  'm_g',
+  'r_g',
+  'l_y',
+  'm_y',
+  'r_y',
+  'l_r',
+  'm_r',
+  'r_r',
+  'l_e',
+  'm_e',
+  'r_e',
+];
+
 export class EmojiRegistry {
   private readonly staticEmojis = new Map<BallId, StoredAppEmoji>();
   private readonly shakeEmojis = new Map<BallId, StoredAppEmoji>();
   private readonly typeEmojis = new Map<string, StoredAppEmoji>();
   private readonly rarityEmojis = new Map<string, StoredAppEmoji>();
   private readonly uiEmojis = new Map<UiIconKey, StoredAppEmoji>();
+  private readonly hpEmojis = new Map<HpBarSlotKey, StoredAppEmoji>();
 
   public async syncAndLoad(token: string, clientId: string): Promise<void> {
     const rest = new REST({ version: '10' }).setToken(token);
@@ -239,6 +270,31 @@ export class EmojiRegistry {
         );
       }
     }
+
+    // 6) Sync 12 Seamless Capsule HP Bar segments
+    for (const hpKey of HP_BAR_KEYS) {
+      const targetName = `${HP_PREFIX}${hpKey}`;
+      const existing = byName.get(targetName);
+      if (existing) {
+        this.hpEmojis.set(hpKey, existing);
+        continue;
+      }
+
+      try {
+        const pngPath = resolve(process.cwd(), 'public', 'ui', `hp_${hpKey}.png`);
+        const buffer = await readFile(pngPath);
+        const created = await this.uploadEmoji(rest, route, targetName, 'image/png', buffer);
+        if (created) {
+          this.hpEmojis.set(hpKey, created);
+          console.log(`[EmojiRegistry] Đã tải lên HP Bar segment: :${created.name}:`);
+        }
+      } catch (error) {
+        console.warn(
+          `[EmojiRegistry] Không thể upload HP bar ${hpKey}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
   }
 
   private async uploadEmoji(
@@ -308,6 +364,37 @@ export class EmojiRegistry {
       return `<:${entry.name}:${entry.id}>`;
     }
     return '';
+  }
+
+  public getTypeButtonEmoji(
+    typeName: string,
+  ): { readonly id: string; readonly name: string } | undefined {
+    const key = typeName.trim().toLowerCase();
+    const entry = this.typeEmojis.get(key);
+    if (entry) {
+      return { id: entry.id, name: entry.name };
+    }
+    return undefined;
+  }
+
+  public buildHpBar(hp: number, maxHp: number, length = 7): string {
+    const safeLength = Math.max(3, length);
+    const ratio = maxHp > 0 ? Math.max(0, Math.min(1, hp / maxHp)) : 0;
+    const filled = hp <= 0 ? 0 : Math.max(1, Math.round(ratio * safeLength));
+    const fillColor: 'g' | 'y' | 'r' = ratio > 0.5 ? 'g' : ratio > 0.2 ? 'y' : 'r';
+
+    const segments: string[] = [];
+    for (let i = 0; i < safeLength; i += 1) {
+      const pos: 'l' | 'm' | 'r' = i === 0 ? 'l' : i === safeLength - 1 ? 'r' : 'm';
+      const color = i < filled ? fillColor : 'e';
+      const slotKey: HpBarSlotKey = `${pos}_${color}`;
+      const entry = this.hpEmojis.get(slotKey);
+      if (!entry) {
+        return `${'▰'.repeat(filled)}${'▱'.repeat(safeLength - filled)}`;
+      }
+      segments.push(`<:${entry.name}:${entry.id}>`);
+    }
+    return segments.join('');
   }
 
   public getRarityMention(rarity: RarityTier): string {

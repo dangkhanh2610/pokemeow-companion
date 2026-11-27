@@ -1,14 +1,22 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+} from 'discord.js';
 import { getBallSpec } from '@/game/catalog/ball-catalog';
 import { RARITY_CONFIGS } from '@/game/catalog/creature-catalog';
 import { BAIT_CATALOG, ROD_CATALOG } from '@/game/catalog/fishing-catalog';
+import { getSpeciesMovePool, type MoveSpec } from '@/game/catalog/move-catalog';
 import {
   analyzeDefensiveMatchups,
   computeComputedStats,
+  type BattleStatusCondition,
   type CombatantState,
-  type CombatMoveSpec,
 } from '@/game/engine/battle-engine';
-import type { BattleSessionView, GymLeaderSpec } from '@/game/services/battle-service';
+import type { BattleSessionView, ChallengerOverviewItem } from '@/game/services/battle-service';
 import type { CaptchaView, VerifyCaptchaOutcome } from '@/game/services/captcha-service';
 import {
   TRAIN_COST_PER_LEVEL,
@@ -28,6 +36,7 @@ import type {
   PaginatedMarketResult,
   TradeSessionView,
 } from '@/game/services/market-service';
+import type { PokemonMoveShopView } from '@/game/services/move-shop-service';
 import type { ClaimQuestsOutcome, QuestProgressItem, QuestSummary } from '@/game/services/quest-service';
 import type {
   CreatureInspectResult,
@@ -57,11 +66,20 @@ function rarityTag(rarity: string, isShiny: boolean): string {
   return `${rar}${shiny}`.trim();
 }
 
-function hpBar(hp: number, maxHp: number): string {
-  const segments = 10;
-  const ratio = Math.max(0, Math.min(1, hp / Math.max(1, maxHp)));
-  const filled = Math.round(ratio * segments);
-  return `[${'■'.repeat(filled)}${'□'.repeat(segments - filled)}] ${hp}/${maxHp} HP`;
+function renderLogIcons(line: string): string {
+  return line.replace(/\[TYPE:([A-Za-z]+)\]/g, (_match, rawType: string) => {
+    return botEmojiRegistry.getTypeMention(rawType) || `[${rawType}]`;
+  });
+}
+
+function formatStatusTag(status: BattleStatusCondition, steelGuardTurns: number): string {
+  const tags: string[] = [];
+  if (status === 'BURN') tags.push(`${botEmojiRegistry.getTypeMention('Fire')} \`BỎNG\``);
+  if (status === 'PARALYZE') tags.push(`${botEmojiRegistry.getTypeMention('Electric')} \`TÊ LIỆT\``);
+  if (status === 'FREEZE') tags.push(`${botEmojiRegistry.getTypeMention('Ice')} \`ĐÓNG BĂNG\``);
+  if (status === 'POISON') tags.push(`${botEmojiRegistry.getTypeMention('Poison')} \`ĐỘC\``);
+  if (steelGuardTurns > 0) tags.push(`${botEmojiRegistry.getTypeMention('Steel')} \`GIÁP THÉP\``);
+  return tags.length > 0 ? ` · ${tags.join(' ')}` : '';
 }
 
 // ======================= ANTI-MACRO CAPTCHA =======================
@@ -617,30 +635,95 @@ export function buildTradeButtonsRow(
   );
 }
 
-// ======================= BATTLE SYSTEM (/battle) =======================
+// ======================= BATTLE SYSTEM (/battle, ;gym) & SKILL SHOP (;ms) =======================
 
-export function buildGymListEmbed(
-  displayName: string,
-  gyms: readonly (GymLeaderSpec & { readonly cleared: boolean })[],
-  prefix: string,
-): EmbedBuilder {
+function formatChallengerRow(c: ChallengerOverviewItem): string {
   const checkIcon = botEmojiRegistry.getCheckMention();
   const coinIcon = botEmojiRegistry.getCoinMention();
-  const clearedCount = gyms.filter((g) => g.cleared).length;
+  const ballIcon = botEmojiRegistry.getBallMention(c.rewardBall);
+  const typeIcons = c.speciesTypes
+    .map((t) => botEmojiRegistry.getTypeMention(t) || t)
+    .join('');
 
-  const lines = gyms.map((g) => {
-    const ballIcon = botEmojiRegistry.getBallMention(g.rewardBall);
-    const status = g.cleared ? `${checkIcon} ` : `\`[${g.stage}]\` `;
-    return `${status}**Gym ${g.stage} · ${g.leaderName}** (Lv.${g.level}) — *${g.badgeName}*\n└ Thưởng lần đầu: ${coinIcon} **${formatNumber(g.rewardCoins)}** + ${ballIcon} **${g.rewardQty}x**`;
-  });
+  const prefixMark = c.cleared
+    ? `${checkIcon} \`#${c.stage}\``
+    : c.unlocked
+      ? `\`[#${c.stage}]\``
+      : '`[KHÓA]`';
+  const rewardNote = c.cleared
+    ? `*Đã hạ (tái đấu ${coinIcon} ${formatNumber(Math.round(c.rewardCoins * 0.25))})*`
+    : `${coinIcon} **${formatNumber(c.rewardCoins)}** + ${ballIcon} **${c.rewardQty}x**`;
+
+  return `${prefixMark} ${typeIcons} **${c.leaderName}** · ${c.speciesName} \`Lv.${c.level}\` — ${rewardNote}`;
+}
+
+export function buildChallengerListEmbed(
+  displayName: string,
+  challengers: readonly ChallengerOverviewItem[],
+  prefix: string,
+): EmbedBuilder {
+  const officialGyms = challengers.filter((c) => c.isGymBadge);
+  const gymCleared = officialGyms.filter((c) => c.cleared).length;
+  const rookies = challengers.filter((c) => c.tier === 'rookie');
+  const elites = challengers.filter((c) => c.tier === 'elite');
 
   return new EmbedBuilder()
     .setColor(0xe11d48)
-    .setTitle(`Đấu Trường 8 Gym · ${displayName} (${clearedCount}/8 Huy Hiệu)`)
-    .setDescription(lines.join('\n'))
+    .setTitle(`Danh Sách Challengers & Gym · ${displayName} (${gymCleared}/8 Huy Hiệu)`)
+    .setDescription(
+      [
+        `Chọn một **Challenger** từ menu bên dưới để vào trận ngay, hoặc gõ \`${prefix}gym <số>\` (ví dụ \`${prefix}gym 1\`).`,
+        `Mẹo: Mua thêm kỹ năng riêng cho Pokémon tại \`${prefix}ms\` trước khi gặp Gym cao!`,
+      ].join('\n'),
+    )
+    .addFields(
+      {
+        name: 'Tân Thủ & Đối Thủ (#1 – #2)',
+        value: rookies.map(formatChallengerRow).join('\n'),
+        inline: false,
+      },
+      {
+        name: '8 Thủ Lĩnh Gym Kanto (#3 – #10)',
+        value: officialGyms.map(formatChallengerRow).join('\n'),
+        inline: false,
+      },
+      {
+        name: 'Đỉnh Cao Liên Đoàn (#11 – #12)',
+        value: elites.map(formatChallengerRow).join('\n'),
+        inline: false,
+      },
+    )
     .setFooter({
-      text: `Dùng ${prefix}bt gym [1-8] hoặc /battle gym để khiêu chiến`,
+      text: `PokeNyan Arena  ·  Mở khóa tuần tự từng Challenger  ·  ${prefix}ms để nâng cấp bộ chiêu`,
     });
+}
+
+export function buildChallengerSelectRow(
+  ownerUserId: string,
+  challengers: readonly ChallengerOverviewItem[],
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  const unlockedList = challengers.filter((c) => c.unlocked);
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`gympick:${ownerUserId}`)
+    .setPlaceholder('Chọn Challenger muốn khiêu chiến...');
+
+  for (const c of unlockedList) {
+    const typeBtnEmoji = botEmojiRegistry.getTypeButtonEmoji(c.speciesTypes[0] ?? 'Normal');
+    const opt = new StringSelectMenuOptionBuilder()
+      .setLabel(`#${c.stage} · ${c.leaderName} (${c.speciesName} Lv.${c.level})`)
+      .setValue(String(c.stage))
+      .setDescription(
+        c.cleared
+          ? `${c.title} · Đã vượt qua (Tái đấu)`
+          : `${c.title} · Thưởng ${formatNumber(c.rewardCoins)} PC`,
+      );
+    if (typeBtnEmoji) {
+      opt.setEmoji(typeBtnEmoji);
+    }
+    menu.addOptions(opt);
+  }
+
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
 }
 
 function formatFighterField(f: CombatantState): string {
@@ -648,10 +731,15 @@ function formatFighterField(f: CombatantState): string {
   const types = f.species.types
     .map((t) => botEmojiRegistry.getTypeMention(t) || t)
     .join(' ');
+  const pct = Math.max(0, Math.round((f.hp / Math.max(1, f.maxHp)) * 100));
+  const bar = botEmojiRegistry.buildHpBar(f.hp, f.maxHp, 7);
+  const statusTag = formatStatusTag(f.status, f.steelGuardTurns);
+
   return [
-    `${shiny}**${f.species.name}** (Lv.${f.level}) ${types}`,
-    `\`${hpBar(f.hp, f.maxHp)}\``,
-    `ATK ${f.atk} · DEF ${f.def} · SPD ${f.spd}`,
+    `${shiny}**${f.species.name}** \`Lv.${f.level}\` ${types}`,
+    `${bar} \`${pct}%\``,
+    `HP **${f.hp}/${f.maxHp}**${statusTag}`,
+    `ATK **${f.atk}** · SpA **${f.spAtk}** · DEF **${f.def}** · SPD **${f.spd}**`,
   ].join('\n');
 }
 
@@ -661,7 +749,7 @@ export function buildBattleEmbed(battle: BattleSessionView): EmbedBuilder {
   const isFinished = battle.status === 'FINISHED';
   const modeTitle =
     battle.mode === 'GYM' && battle.gymSpec
-      ? `Gym ${battle.gymSpec.stage} · ${battle.gymSpec.leaderName}`
+      ? `#${battle.gymSpec.stage} · ${battle.gymSpec.leaderName} (${battle.gymSpec.badgeName})`
       : battle.mode === 'PVP'
         ? 'Đấu Trường PvP'
         : 'Đấu Trường PvE';
@@ -693,7 +781,7 @@ export function buildBattleEmbed(battle: BattleSessionView): EmbedBuilder {
         : battle.fighterB.species.animatedSpriteUrl,
     );
 
-  const logsBlock = battle.recentLogs.join('\n');
+  const logsBlock = battle.recentLogs.map(renderLogIcons).join('\n');
   let footerOrReward = '';
   if (isFinished && battle.winnerOwnerId) {
     const winnerName =
@@ -707,7 +795,7 @@ export function buildBattleEmbed(battle: BattleSessionView): EmbedBuilder {
           ? ` · ${botEmojiRegistry.getBallMention(battle.reward.bonusBallId)} **+${battle.reward.bonusBallQty}**`
           : '';
       const badgePart = battle.reward.firstClearBadgeName
-        ? ` · Huy hiệu **${battle.reward.firstClearBadgeName}**!`
+        ? ` · **${battle.reward.firstClearBadgeName}**!`
         : '';
       footerOrReward += `\nThưởng: ${coinIcon} **+${formatNumber(battle.reward.coinsEarned)} PC** · **+${battle.reward.trainerXpEarned} XP Trainer** · **+${battle.reward.buddyXpEarned} XP Fighter**${ballPart}${badgePart}`;
     }
@@ -716,7 +804,7 @@ export function buildBattleEmbed(battle: BattleSessionView): EmbedBuilder {
       battle.activeTurnOwnerId === battle.fighterA.ownerId
         ? battle.fighterA.ownerName
         : battle.fighterB.ownerName;
-    footerOrReward = `\n\nLượt ra chiêu hiện tại: **${activeName}**`;
+    footerOrReward = `\n\nLượt ra chiêu hiện tại: **${activeName}** (${battle.fighterA.moves.length}/4 kỹ năng)`;
   }
 
   embed.setDescription(`${logsBlock}${footerOrReward}`);
@@ -748,36 +836,151 @@ export function buildBattleActionRows(
   const activeFighter =
     battle.activeTurnOwnerId === battle.fighterA.ownerId ? battle.fighterA : battle.fighterB;
 
-  return [
-    new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`bt:move:${battle.battleId}:primary`)
-        .setLabel(`${activeFighter.primaryMove.name} (${activeFighter.primaryMove.type})`)
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`bt:move:${battle.battleId}:secondary`)
-        .setLabel(`${activeFighter.secondaryMove.name} (${activeFighter.secondaryMove.type})`)
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`bt:move:${battle.battleId}:ultimate`)
-        .setLabel(
-          activeFighter.ultimateCooldown > 0
-            ? `${activeFighter.ultimateMove.name} (${activeFighter.ultimateCooldown})`
-            : `${activeFighter.ultimateMove.name} (${activeFighter.ultimateMove.type})`,
-        )
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(activeFighter.ultimateCooldown > 0),
-      new ButtonBuilder()
-        .setCustomId(`bt:move:${battle.battleId}:recover`)
-        .setLabel(`Hồi Phục (${activeFighter.recoverUsesLeft})`)
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(activeFighter.recoverUsesLeft <= 0),
-      new ButtonBuilder()
-        .setCustomId(`bt:forfeit:${battle.battleId}`)
-        .setLabel('Đầu Hàng')
-        .setStyle(ButtonStyle.Secondary),
-    ),
-  ];
+  const moveButtons = activeFighter.moves.slice(0, 4).map((move, idx) => {
+    const cd = activeFighter.cooldowns[move.id] ?? 0;
+    const noHealUses = move.specialEffect === 'heal_38' && activeFighter.healUsesLeft <= 0;
+    const label =
+      cd > 0
+        ? `${move.name} (${cd})`
+        : move.specialEffect === 'heal_38'
+          ? `${move.name} (${activeFighter.healUsesLeft})`
+          : move.name;
+
+    const style =
+      move.category === 'status'
+        ? ButtonStyle.Success
+        : move.tier === 'ultimate'
+          ? ButtonStyle.Danger
+          : ButtonStyle.Primary;
+
+    const btn = new ButtonBuilder()
+      .setCustomId(`bt:slot:${battle.battleId}:${idx}`)
+      .setLabel(label.slice(0, 80))
+      .setStyle(style)
+      .setDisabled(cd > 0 || noHealUses);
+
+    const typeEmoji = botEmojiRegistry.getTypeButtonEmoji(move.type);
+    if (typeEmoji) {
+      btn.setEmoji(typeEmoji);
+    }
+    return btn;
+  });
+
+  moveButtons.push(
+    new ButtonBuilder()
+      .setCustomId(`bt:forfeit:${battle.battleId}`)
+      .setLabel('Đầu Hàng')
+      .setStyle(ButtonStyle.Secondary),
+  );
+
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(...moveButtons)];
+}
+
+export function buildMoveShopEmbed(
+  displayName: string,
+  view: PokemonMoveShopView,
+  prefix: string,
+  notice?: string,
+): EmbedBuilder {
+  const coinIcon = botEmojiRegistry.getCoinMention();
+  const checkIcon = botEmojiRegistry.getCheckMention();
+  const shiny = view.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
+  const typeText = view.species.types
+    .map((t) => `${botEmojiRegistry.getTypeMention(t) || ''} **${t}**`.trim())
+    .join(' · ');
+
+  const equippedLines: string[] = [];
+  for (let i = 0; i < 4; i += 1) {
+    const move = view.equippedMoves[i];
+    if (move) {
+      const icon = botEmojiRegistry.getTypeMention(move.type) || `[${move.type}]`;
+      const powerText = move.power > 0 ? `Pow ${move.power}` : 'Hỗ trợ';
+      const stab = view.species.types.includes(move.type) ? ' · `STAB`' : '';
+      equippedLines.push(`\`[${i + 1}]\` ${icon} **${move.name}** (${powerText}${stab})`);
+    } else {
+      equippedLines.push(`\`[${i + 1}]\` *(Ô trống — mua kỹ năng mới ở danh sách bên dưới)*`);
+    }
+  }
+
+  const shopLines = view.shopEntries.map((entry) => {
+    const icon = botEmojiRegistry.getTypeMention(entry.move.type) || `[${entry.move.type}]`;
+    const cat =
+      entry.move.category === 'physical'
+        ? 'Vật lý'
+        : entry.move.category === 'special'
+          ? 'Phép'
+          : 'Hỗ trợ';
+    const powerInfo =
+      entry.move.power > 0
+        ? `Pow **${entry.move.power}** · Acc **${Math.round(entry.move.accuracy * 100)}%**`
+        : 'Chiêu chiến thuật';
+    const stab = view.species.types.includes(entry.move.type) ? ' · `STAB`' : '';
+    const statusTag =
+      entry.equippedSlot !== null
+        ? `${checkIcon} *Đang lắp Ô #${entry.equippedSlot}*`
+        : entry.unlocked
+          ? `${checkIcon} *Đã mở (chưa lắp)*`
+          : `${coinIcon} **${formatNumber(entry.move.price)} PC**`;
+
+    return `\`[${entry.index}]\` ${icon} **${entry.move.name}** (${cat} · ${powerInfo}${stab}) — ${statusTag}\n└ *${entry.move.description}*`;
+  });
+
+  const descParts = [
+    `${typeText}  ·  Kho \`#${view.boxIndex}\` (\`#${view.shortId}\`)  ·  ${coinIcon} Số dư: **${formatNumber(view.trainerCoins)} PC**`,
+    notice ? `\n${notice}` : '',
+  ].filter(Boolean);
+
+  return new EmbedBuilder()
+    .setColor(0x6366f1)
+    .setTitle(`Cửa Hàng Kỹ Năng · ${shiny}${view.species.name} (Lv.${view.level})`)
+    .setDescription(descParts.join('\n'))
+    .addFields(
+      {
+        name: `Bộ Chiêu Hiện Tại (${view.equippedMoves.length}/4 Ô)`,
+        value: equippedLines.join('\n'),
+        inline: false,
+      },
+      {
+        name: `Danh Sách Kỹ Năng Riêng Của ${view.species.name}`,
+        value: shopLines.join('\n'),
+        inline: false,
+      },
+    )
+    .setThumbnail(
+      view.isShiny ? view.species.shinyAnimatedSpriteUrl : view.species.animatedSpriteUrl,
+    )
+    .setFooter({
+      text: `${displayName}  ·  Chọn menu bên dưới để Mua/Trang bị nhanh  ·  ${prefix}ms equip <số> <ô_1-4>`,
+    });
+}
+
+export function buildMoveShopSelectRow(
+  ownerUserId: string,
+  view: PokemonMoveShopView,
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`msbuy:${ownerUserId}:${view.creatureId}`)
+    .setPlaceholder('Chọn kỹ năng để Mua (hoặc Lắp nhanh nếu đã có)...');
+
+  for (const entry of view.shopEntries) {
+    const typeEmoji = botEmojiRegistry.getTypeButtonEmoji(entry.move.type);
+    const labelSuffix =
+      entry.equippedSlot !== null
+        ? `Đang ở Ô #${entry.equippedSlot}`
+        : entry.unlocked
+          ? 'Đã mở · Bấm để lắp'
+          : `${formatNumber(entry.move.price)} PC`;
+    const opt = new StringSelectMenuOptionBuilder()
+      .setLabel(`[${entry.index}] ${entry.move.name} · ${labelSuffix}`.slice(0, 100))
+      .setValue(entry.move.id)
+      .setDescription(entry.move.description.slice(0, 100));
+    if (typeEmoji) {
+      opt.setEmoji(typeEmoji);
+    }
+    menu.addOptions(opt);
+  }
+
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
 }
 
 export function buildErrorNotice(message: string): string {
@@ -793,14 +996,19 @@ function makeStatBar(iv: number): string {
 
 function formatMoveLine(
   slotNum: number,
-  move: CombatMoveSpec,
+  move: MoveSpec,
   speciesTypes: readonly string[],
 ): string {
   const typeIcon = botEmojiRegistry.getTypeMention(move.type) || `[${move.type}]`;
-  const catLabel = move.category === 'physical' ? 'Vật lý' : 'Phép';
+  const catLabel =
+    move.category === 'physical' ? 'Vật lý' : move.category === 'special' ? 'Phép' : 'Hỗ trợ';
+  const powerPart =
+    move.power > 0
+      ? `Pow **${move.power}** · Acc **${Math.round(move.accuracy * 100)}%**`
+      : 'Chiêu chiến thuật';
   const stabTag = speciesTypes.includes(move.type) ? ' · `STAB`' : '';
   const cdTag = move.cooldownTurns > 0 ? ' · `Hồi 1 lượt`' : '';
-  return `\`[${slotNum}]\` ${typeIcon} **${move.name}** (${catLabel} · Pow **${move.power}** · Acc **${Math.round(move.accuracy * 100)}%**${stabTag}${cdTag})\n└ *${move.description}*`;
+  return `\`[${slotNum}]\` ${typeIcon} **${move.name}** (${catLabel} · ${powerPart}${stabTag}${cdTag})\n└ *${move.description}*`;
 }
 
 export function buildCreatureInspectEmbed(
@@ -871,12 +1079,28 @@ export function buildCreatureInspectEmbed(
     })
     .join('\n');
 
-  const movesBlock = [
-    formatMoveLine(1, stats.primaryMove, view.species.types),
-    formatMoveLine(2, stats.secondaryMove, view.species.types),
-    formatMoveLine(3, stats.ultimateMove, view.species.types),
-    '`[4]` **Recover & Focus** (Hỗ trợ · Hồi **30% HP** & **+15% Công** · Tối đa 2 lần/trận)',
-  ].join('\n');
+  let movesHeader = 'Bộ Kỹ Năng Khởi Đầu (2/4 Ô)';
+  let movesBlock = '';
+  if (isOwned) {
+    movesHeader = `Bộ Kỹ Năng Chiến Đấu (${view.equippedMoves.length}/4 Ô)`;
+    const lines: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const m = view.equippedMoves[i];
+      if (m) {
+        lines.push(formatMoveLine(i + 1, m, view.species.types));
+      } else {
+        lines.push(`\`[${i + 1}]\` *(Ô trống — mua kỹ năng riêng qua \`${prefix}ms #${view.shortId}\`)*`);
+      }
+    }
+    movesBlock = lines.join('\n');
+  } else {
+    const pool = getSpeciesMovePool(view.species);
+    movesBlock = [
+      formatMoveLine(1, pool.starterMoves[0], view.species.types),
+      formatMoveLine(2, pool.starterMoves[1], view.species.types),
+      `*(Mỗi cá thể bắt về mở thêm ${pool.shopMoves.length} chiêu riêng trong Shop \`${prefix}ms\`)*`,
+    ].join('\n');
+  }
 
   const matchup = analyzeDefensiveMatchups(view.species.types);
   const fmtMatch = (items: readonly { readonly type: string; readonly mult: number }[]): string =>
@@ -885,10 +1109,14 @@ export function buildCreatureInspectEmbed(
       .map((m) => `${botEmojiRegistry.getTypeMention(m.type) || m.type} \`x${m.mult}\``)
       .join(' ');
 
-  const matchupText = [
+  const matchupLines = [
     `**Yếu:** ${matchup.weaknesses.length > 0 ? fmtMatch(matchup.weaknesses) : '*Không có*'}`,
     `**Kháng:** ${matchup.resistances.length > 0 ? fmtMatch(matchup.resistances) : '*Không có*'}`,
-  ].join('\n');
+  ];
+  if (matchup.immunities.length > 0) {
+    matchupLines.push(`**Miễn nhiễm (x0):** ${fmtMatch(matchup.immunities)}`);
+  }
+  const matchupText = matchupLines.join('\n');
 
   const evoLines: string[] =
     view.evolutions.length > 0
@@ -919,7 +1147,7 @@ export function buildCreatureInspectEmbed(
         inline: false,
       },
       {
-        name: 'Bộ Kỹ Năng Chiến Đấu (4 Chiêu)',
+        name: movesHeader,
         value: movesBlock,
         inline: false,
       },
@@ -945,8 +1173,8 @@ export function buildCreatureInspectEmbed(
 export function buildCreatureInspectButtons(
   ownerUserId: string,
   view: OwnedCreatureInspectView,
-): ActionRowBuilder<ButtonBuilder> {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+): ActionRowBuilder<ButtonBuilder>[] {
+  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`info:nav:${ownerUserId}:${Math.max(0, view.boxIndex - 2)}`)
       .setLabel('◀ Trước')
@@ -972,4 +1200,14 @@ export function buildCreatureInspectButtons(
       .setStyle(ButtonStyle.Primary)
       .setDisabled(view.level >= 100 || view.inMarket),
   );
+
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`info:ms:${ownerUserId}:${view.creatureId}`)
+      .setLabel(`Shop Kỹ Năng (${view.equippedMoves.length}/4)`)
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(view.inMarket),
+  );
+
+  return [row1, row2];
 }

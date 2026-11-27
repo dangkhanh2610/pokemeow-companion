@@ -2,22 +2,29 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { getPrismaClient, withDbRetry } from '@/lib/prisma';
 import { defaultCreatureCatalog } from '../catalog/creature-catalog';
+import { resolveAiMoves, resolveEquippedMoves, type MoveSpec } from '../catalog/move-catalog';
 import { applyXp } from '../engine/spawn-engine';
 import {
+  applyEndOfRoundStatus,
   buildCombatant,
   executeMove,
-  type BattleMoveAction,
+  getEffectiveSpeed,
+  getTypeEffectiveness,
   type CombatantState,
 } from '../engine/battle-engine';
 import type { BallId, CreatureIVs, CreatureSpecies } from '../types';
 import { addCreatureXp } from './evolution-service';
 import { questService } from './quest-service';
-import { trainerService, type TrainerIdentityInput } from './trainer-service';
+import { OFFICIAL_GYM_BADGE_IDS, trainerService, type TrainerIdentityInput } from './trainer-service';
 
-export interface GymLeaderSpec {
+export type ChallengerTier = 'rookie' | 'gym' | 'elite';
+
+export interface ChallengerSpec {
   readonly stage: number;
+  readonly tier: ChallengerTier;
   readonly badgeId: string;
   readonly badgeName: string;
+  readonly isGymBadge: boolean;
   readonly leaderName: string;
   readonly title: string;
   readonly speciesId: number;
@@ -27,106 +34,189 @@ export interface GymLeaderSpec {
   readonly rewardQty: number;
 }
 
-export const GYM_LEADERS: readonly GymLeaderSpec[] = [
+export type ChallengerOverviewItem = ChallengerSpec & {
+  readonly cleared: boolean;
+  readonly unlocked: boolean;
+  readonly speciesName: string;
+  readonly speciesTypes: readonly string[];
+};
+
+export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
   {
     stage: 1,
-    badgeId: 'boulder',
-    badgeName: 'Boulder Badge',
-    leaderName: 'Brock',
-    title: 'Thủ Lĩnh Đá Pewter',
-    speciesId: 95,
-    level: 12,
-    rewardCoins: 2000,
-    rewardBall: 'greatball',
+    tier: 'rookie',
+    badgeId: 'rookie_joey',
+    badgeName: 'Chứng Nhận Tân Thủ',
+    isGymBadge: false,
+    leaderName: 'Youngster Joey',
+    title: 'Tân Thủ Đường Số 1',
+    speciesId: 19, // Rattata
+    level: 6,
+    rewardCoins: 1000,
+    rewardBall: 'pokeball',
     rewardQty: 3,
   },
   {
     stage: 2,
-    badgeId: 'cascade',
-    badgeName: 'Cascade Badge',
-    leaderName: 'Misty',
-    title: 'Thủ Lĩnh Nước Cerulean',
-    speciesId: 121,
-    level: 18,
-    rewardCoins: 3500,
-    rewardBall: 'ultraball',
+    tier: 'rookie',
+    badgeId: 'rival_blue',
+    badgeName: 'Chứng Nhận Đối Thủ',
+    isGymBadge: false,
+    leaderName: 'Rival Blue',
+    title: 'Đối Thủ Khởi Đầu',
+    speciesId: 17, // Pidgeotto
+    level: 10,
+    rewardCoins: 1500,
+    rewardBall: 'greatball',
     rewardQty: 3,
   },
   {
     stage: 3,
+    tier: 'gym',
+    badgeId: 'boulder',
+    badgeName: 'Boulder Badge',
+    isGymBadge: true,
+    leaderName: 'Brock',
+    title: 'Gym 1 Pewter · Thủ Lĩnh Đá',
+    speciesId: 95, // Onix
+    level: 15,
+    rewardCoins: 2500,
+    rewardBall: 'greatball',
+    rewardQty: 3,
+  },
+  {
+    stage: 4,
+    tier: 'gym',
+    badgeId: 'cascade',
+    badgeName: 'Cascade Badge',
+    isGymBadge: true,
+    leaderName: 'Misty',
+    title: 'Gym 2 Cerulean · Thủ Lĩnh Nước',
+    speciesId: 121, // Starmie
+    level: 22,
+    rewardCoins: 4000,
+    rewardBall: 'ultraball',
+    rewardQty: 3,
+  },
+  {
+    stage: 5,
+    tier: 'gym',
     badgeId: 'thunder',
     badgeName: 'Thunder Badge',
+    isGymBadge: true,
     leaderName: 'Lt. Surge',
-    title: 'Thủ Lĩnh Sấm Vermilion',
-    speciesId: 26,
-    level: 24,
-    rewardCoins: 5000,
+    title: 'Gym 3 Vermilion · Thủ Lĩnh Sấm',
+    speciesId: 26, // Raichu
+    level: 28,
+    rewardCoins: 6000,
     rewardBall: 'premierball',
     rewardQty: 1,
   },
   {
-    stage: 4,
+    stage: 6,
+    tier: 'gym',
     badgeId: 'rainbow',
     badgeName: 'Rainbow Badge',
+    isGymBadge: true,
     leaderName: 'Erika',
-    title: 'Thủ Lĩnh Thảo Celadon',
-    speciesId: 45,
-    level: 32,
-    rewardCoins: 7500,
+    title: 'Gym 4 Celadon · Thủ Lĩnh Thảo',
+    speciesId: 45, // Vileplume
+    level: 35,
+    rewardCoins: 8000,
     rewardBall: 'premierball',
     rewardQty: 2,
-  },
-  {
-    stage: 5,
-    badgeId: 'soul',
-    badgeName: 'Soul Badge',
-    leaderName: 'Koga',
-    title: 'Ninja Độc Fuchsia',
-    speciesId: 89,
-    level: 40,
-    rewardCoins: 10000,
-    rewardBall: 'premierball',
-    rewardQty: 2,
-  },
-  {
-    stage: 6,
-    badgeId: 'marsh',
-    badgeName: 'Marsh Badge',
-    leaderName: 'Sabrina',
-    title: 'Ngoại Cảm Saffron',
-    speciesId: 65,
-    level: 48,
-    rewardCoins: 13500,
-    rewardBall: 'premierball',
-    rewardQty: 3,
   },
   {
     stage: 7,
-    badgeId: 'volcano',
-    badgeName: 'Volcano Badge',
-    leaderName: 'Blaine',
-    title: 'Lửa Núi Cinnabar',
-    speciesId: 59,
-    level: 56,
-    rewardCoins: 17500,
+    tier: 'gym',
+    badgeId: 'soul',
+    badgeName: 'Soul Badge',
+    isGymBadge: true,
+    leaderName: 'Koga',
+    title: 'Gym 5 Fuchsia · Ninja Độc',
+    speciesId: 89, // Muk
+    level: 42,
+    rewardCoins: 11000,
+    rewardBall: 'premierball',
+    rewardQty: 2,
+  },
+  {
+    stage: 8,
+    tier: 'gym',
+    badgeId: 'marsh',
+    badgeName: 'Marsh Badge',
+    isGymBadge: true,
+    leaderName: 'Sabrina',
+    title: 'Gym 6 Saffron · Ngoại Cảm',
+    speciesId: 65, // Alakazam
+    level: 50,
+    rewardCoins: 14500,
     rewardBall: 'premierball',
     rewardQty: 3,
   },
   {
-    stage: 8,
+    stage: 9,
+    tier: 'gym',
+    badgeId: 'volcano',
+    badgeName: 'Volcano Badge',
+    isGymBadge: true,
+    leaderName: 'Blaine',
+    title: 'Gym 7 Cinnabar · Hỏa Diệm',
+    speciesId: 59, // Arcanine
+    level: 58,
+    rewardCoins: 18500,
+    rewardBall: 'premierball',
+    rewardQty: 3,
+  },
+  {
+    stage: 10,
+    tier: 'gym',
     badgeId: 'earth',
     badgeName: 'Earth Badge',
+    isGymBadge: true,
     leaderName: 'Giovanni',
-    title: 'Trùm Cuối Viridian',
-    speciesId: 150,
-    level: 68,
+    title: 'Gym 8 Viridian · Trùm Cuối',
+    speciesId: 112, // Rhydon
+    level: 66,
     rewardCoins: 25000,
+    rewardBall: 'masterball',
+    rewardQty: 1,
+  },
+  {
+    stage: 11,
+    tier: 'elite',
+    badgeId: 'elite_lance',
+    badgeName: 'Danh Hiệu Bậc Thầy Rồng',
+    isGymBadge: false,
+    leaderName: 'Lance',
+    title: 'Tứ Thiên Vương · Bậc Thầy Rồng',
+    speciesId: 149, // Dragonite
+    level: 76,
+    rewardCoins: 35000,
+    rewardBall: 'premierball',
+    rewardQty: 4,
+  },
+  {
+    stage: 12,
+    tier: 'elite',
+    badgeId: 'champ_red',
+    badgeName: 'Huyền Thoại Mt. Silver',
+    isGymBadge: false,
+    leaderName: 'Champion Red',
+    title: 'Nhà Vô Địch Huyền Thoại',
+    speciesId: 150, // Mewtwo
+    level: 85,
+    rewardCoins: 50000,
     rewardBall: 'masterball',
     rewardQty: 1,
   },
 ];
 
 export type BattleMode = 'PVE' | 'GYM' | 'PVP';
+
+export type BattleTurnAction =
+  | { readonly kind: 'slot'; readonly slotIndex: number }
+  | { readonly kind: 'forfeit' };
 
 export interface BattleRewardSummary {
   readonly coinsEarned: number;
@@ -143,7 +233,7 @@ export interface BattleSessionView {
   readonly status: 'CHALLENGED' | 'ACTIVE' | 'FINISHED';
   readonly turnNumber: number;
   readonly activeTurnOwnerId: string;
-  readonly gymSpec?: GymLeaderSpec;
+  readonly gymSpec?: ChallengerSpec;
   readonly fighterA: CombatantState;
   readonly fighterB: CombatantState;
   readonly winnerOwnerId: string | null;
@@ -157,7 +247,7 @@ interface InternalBattleSession {
   status: 'CHALLENGED' | 'ACTIVE' | 'FINISHED';
   turnNumber: number;
   activeTurnOwnerId: string;
-  readonly gymSpec?: GymLeaderSpec;
+  readonly gymSpec?: ChallengerSpec;
   readonly fighterACreatureId: string;
   readonly fighterBCreatureId?: string;
   readonly fighterA: CombatantState;
@@ -199,12 +289,49 @@ function toView(s: InternalBattleSession): BattleSessionView {
     turnNumber: s.turnNumber,
     activeTurnOwnerId: s.activeTurnOwnerId,
     gymSpec: s.gymSpec,
-    fighterA: { ...s.fighterA },
-    fighterB: { ...s.fighterB },
+    fighterA: { ...s.fighterA, cooldowns: { ...s.fighterA.cooldowns } },
+    fighterB: { ...s.fighterB, cooldowns: { ...s.fighterB.cooldowns } },
     winnerOwnerId: s.winnerOwnerId,
     recentLogs: [...s.recentLogs],
     reward: s.reward,
   };
+}
+
+function pickAiSlot(ai: CombatantState, opponent: CombatantState): number {
+  const usable = ai.moves
+    .map((move, idx) => ({ move, idx }))
+    .filter(
+      ({ move }) =>
+        (ai.cooldowns[move.id] ?? 0) === 0 &&
+        !(move.specialEffect === 'heal_38' && ai.healUsesLeft <= 0),
+    );
+
+  if (usable.length === 0) {
+    return 0;
+  }
+
+  // Ưu tiên hồi phục nếu máu dưới 35%
+  if (ai.hp < ai.maxHp * 0.35) {
+    const healSlot = usable.find((u) => u.move.specialEffect === 'heal_38');
+    if (healSlot && Math.random() < 0.72) {
+      return healSlot.idx;
+    }
+  }
+
+  // Chấm điểm chiến thuật từng chiêu theo khắc hệ + STAB + Power
+  const attackSlots = usable.filter((u) => u.move.category !== 'status');
+  if (attackSlots.length === 0) {
+    return usable[0]!.idx;
+  }
+
+  const scored = attackSlots.map(({ move, idx }) => {
+    const eff = getTypeEffectiveness(move.type, opponent.species.types);
+    const stab = ai.species.types.includes(move.type) ? 1.5 : 1.0;
+    const score = move.power * eff * stab * (0.9 + Math.random() * 0.25);
+    return { idx, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]!.idx;
 }
 
 export class BattleService {
@@ -238,6 +365,7 @@ export class BattleService {
     readonly ivs: CreatureIVs;
     readonly level: number;
     readonly isShiny: boolean;
+    readonly equippedMoves: readonly MoveSpec[];
   } | null> {
     const prisma = getPrismaClient();
     const trainer = await withDbRetry(() =>
@@ -276,12 +404,19 @@ export class BattleService {
       return null;
     }
 
+    const equippedMoves = resolveEquippedMoves(
+      species,
+      creature.equippedMoves,
+      creature.unlockedMoves,
+    );
+
     return {
       id: creature.id,
       species,
       ivs: parseCreatureIvs(creature.ivsJson),
       level: creature.level,
       isShiny: creature.isShiny,
+      equippedMoves,
     };
   }
 
@@ -308,6 +443,8 @@ export class BattleService {
       .getAll()
       .filter((s) => s.formType === 'base' && s.rarity !== 'legendary');
     const enemySpecies = enemyPool[Math.floor(Math.random() * enemyPool.length)] ?? enemyPool[0]!;
+    const aiMoveCount: 2 | 3 | 4 = aiLevel >= 35 ? 4 : aiLevel >= 15 ? 3 : 2;
+    const aiMoves = resolveAiMoves(enemySpecies, aiMoveCount);
 
     const combatA = buildCombatant(
       fighter.species,
@@ -316,6 +453,7 @@ export class BattleService {
       fighter.isShiny,
       playerMeta.userId,
       playerMeta.displayName,
+      fighter.equippedMoves,
     );
     const combatB = buildCombatant(
       enemySpecies,
@@ -324,6 +462,7 @@ export class BattleService {
       false,
       'ai:pve',
       'Pokémon Hoang Dã',
+      aiMoves,
     );
 
     const battleId = randomUUID().slice(0, 12);
@@ -364,7 +503,7 @@ export class BattleService {
     if (!fighter) {
       return {
         ok: false,
-        message: 'Bạn chưa có Pokémon nào trong kho để khiêu chiến Gym!',
+        message: 'Bạn chưa có Pokémon nào trong kho để khiêu chiến Challenger!',
       };
     }
 
@@ -376,27 +515,43 @@ export class BattleService {
       }),
     );
 
-    let gymSpec: GymLeaderSpec | undefined;
+    const overview = this.getChallengerOverview(trainer.gymBadges);
+    let gymSpec: ChallengerSpec | undefined;
+
     if (requestedStage !== undefined) {
-      gymSpec = GYM_LEADERS.find((g) => g.stage === requestedStage);
-      if (!gymSpec) {
-        return { ok: false, message: 'Gym chỉ có từ tầng **1** đến **8**.' };
-      }
-      if (requestedStage > trainer.gymBadges.length + 1) {
+      const matched = overview.find((g) => g.stage === requestedStage);
+      if (!matched) {
         return {
           ok: false,
-          message: `Bạn cần vượt qua **Gym ${trainer.gymBadges.length + 1}** trước khi khiêu chiến **Gym ${requestedStage}**!`,
+          message: `Challenger chỉ có từ số **1** đến **${CHALLENGER_ROSTER.length}**.`,
         };
       }
+      if (!matched.unlocked) {
+        const prev = overview.find((g) => g.stage === requestedStage - 1);
+        return {
+          ok: false,
+          message: `Bạn cần đánh bại **#${requestedStage - 1} · ${prev?.leaderName ?? 'đối thủ trước'}** để mở khóa **${matched.leaderName}**!`,
+        };
+      }
+      gymSpec = matched;
     } else {
-      const nextStage = Math.min(8, trainer.gymBadges.length + 1);
-      gymSpec = GYM_LEADERS.find((g) => g.stage === nextStage) ?? GYM_LEADERS[0]!;
+      gymSpec =
+        overview.find((g) => g.unlocked && !g.cleared) ??
+        overview[overview.length - 1];
+    }
+
+    if (!gymSpec) {
+      return { ok: false, message: 'Không tìm thấy Challenger phù hợp.' };
     }
 
     const bossSpecies = defaultCreatureCatalog.getById(gymSpec.speciesId);
     if (!bossSpecies) {
-      return { ok: false, message: 'Không tìm thấy Pokémon của Gym Leader.' };
+      return { ok: false, message: 'Không tìm thấy Pokémon của Challenger.' };
     }
+
+    const aiMoveCount: 2 | 3 | 4 =
+      gymSpec.stage <= 2 ? 2 : gymSpec.stage <= 6 ? 3 : 4;
+    const aiMoves = resolveAiMoves(bossSpecies, aiMoveCount);
 
     const combatA = buildCombatant(
       fighter.species,
@@ -405,6 +560,7 @@ export class BattleService {
       fighter.isShiny,
       playerMeta.userId,
       playerMeta.displayName,
+      fighter.equippedMoves,
     );
     const combatB = buildCombatant(
       bossSpecies,
@@ -412,7 +568,8 @@ export class BattleService {
       gymSpec.level,
       false,
       `ai:gym:${gymSpec.stage}`,
-      `Gym ${gymSpec.leaderName}`,
+      gymSpec.leaderName,
+      aiMoves,
     );
 
     const battleId = randomUUID().slice(0, 12);
@@ -428,7 +585,7 @@ export class BattleService {
       fighterB: combatB,
       winnerOwnerId: null,
       recentLogs: [
-        `Khiêu chiến **Gym ${gymSpec.stage} · ${gymSpec.leaderName}** (${gymSpec.badgeName})!`,
+        `Khiêu chiến **#${gymSpec.stage} · ${gymSpec.leaderName}** (*${gymSpec.title}*)!`,
       ],
       updatedAt: Date.now(),
     };
@@ -477,6 +634,7 @@ export class BattleService {
       fighterA.isShiny,
       initiatorMeta.userId,
       initiatorMeta.displayName,
+      fighterA.equippedMoves,
     );
     const combatB = buildCombatant(
       fighterB.species,
@@ -485,6 +643,7 @@ export class BattleService {
       fighterB.isShiny,
       targetMeta.userId,
       targetMeta.displayName,
+      fighterB.equippedMoves,
     );
 
     const battleId = randomUUID().slice(0, 12);
@@ -541,10 +700,37 @@ export class BattleService {
     return { ok: true, battle: toView(session) };
   }
 
+  private async finalizeSessionWinner(
+    session: InternalBattleSession,
+    winnerOwnerId: string,
+    interactionId: string,
+  ): Promise<BattleSessionView> {
+    session.status = 'FINISHED';
+    session.winnerOwnerId = winnerOwnerId;
+
+    const isHumanWinner = !winnerOwnerId.startsWith('ai:');
+    if (isHumanWinner) {
+      const winnerCreatureId =
+        winnerOwnerId === session.fighterA.ownerId
+          ? session.fighterACreatureId
+          : (session.fighterBCreatureId ?? session.fighterACreatureId);
+      session.reward = await this.awardVictory(
+        session,
+        winnerOwnerId,
+        winnerCreatureId,
+        interactionId,
+      );
+    }
+
+    const view = toView(session);
+    this.activeBattles.delete(session.battleId);
+    return view;
+  }
+
   public async takeTurn(
     battleId: string,
     actorUserId: string,
-    action: BattleMoveAction | 'forfeit',
+    action: BattleTurnAction,
     interactionId: string,
   ): Promise<BattleActionOutcome> {
     const session = this.activeBattles.get(battleId);
@@ -558,25 +744,12 @@ export class BattleService {
       return { ok: false, message: 'Bạn không phải người tham gia trận đấu này!' };
     }
 
-    if (action === 'forfeit') {
-      session.status = 'FINISHED';
-      session.winnerOwnerId = isPlayerA ? session.fighterB.ownerId : session.fighterA.ownerId;
+    if (action.kind === 'forfeit') {
+      const opponentId = isPlayerA ? session.fighterB.ownerId : session.fighterA.ownerId;
       session.recentLogs.push(
         `**${isPlayerA ? session.fighterA.ownerName : session.fighterB.ownerName}** đã đầu hàng!`,
       );
-      if (session.mode === 'PVP' && session.winnerOwnerId) {
-        const winnerCreatureId = isPlayerA
-          ? (session.fighterBCreatureId ?? session.fighterACreatureId)
-          : session.fighterACreatureId;
-        session.reward = await this.awardVictory(
-          session,
-          session.winnerOwnerId,
-          winnerCreatureId,
-          interactionId,
-        );
-      }
-      const view = toView(session);
-      this.activeBattles.delete(battleId);
+      const view = await this.finalizeSessionWinner(session, opponentId, interactionId);
       return { ok: true, battle: view };
     }
 
@@ -589,86 +762,86 @@ export class BattleService {
     if (session.mode === 'PVP') {
       const attacker = isPlayerA ? session.fighterA : session.fighterB;
       const defender = isPlayerA ? session.fighterB : session.fighterA;
-      const res = executeMove(attacker, defender, action);
+      const isFaster =
+        getEffectiveSpeed(attacker, action.slotIndex) >= getEffectiveSpeed(defender);
+      const res = executeMove(attacker, defender, action.slotIndex, isFaster);
       session.recentLogs.push(res.logLine);
 
       if (defender.hp <= 0) {
-        session.status = 'FINISHED';
-        session.winnerOwnerId = attacker.ownerId;
-        const winnerCreatureId = isPlayerA
-          ? session.fighterACreatureId
-          : (session.fighterBCreatureId ?? session.fighterACreatureId);
-        session.reward = await this.awardVictory(
-          session,
-          attacker.ownerId,
-          winnerCreatureId,
-          interactionId,
-        );
-        const view = toView(session);
-        this.activeBattles.delete(battleId);
-        return { ok: true, battle: view };
+        return {
+          ok: true,
+          battle: await this.finalizeSessionWinner(session, attacker.ownerId, interactionId),
+        };
+      }
+      if (attacker.hp <= 0) {
+        return {
+          ok: true,
+          battle: await this.finalizeSessionWinner(session, defender.ownerId, interactionId),
+        };
+      }
+
+      const dotLog = applyEndOfRoundStatus(attacker);
+      if (dotLog) {
+        session.recentLogs.push(dotLog);
+      }
+      if (attacker.hp <= 0) {
+        return {
+          ok: true,
+          battle: await this.finalizeSessionWinner(session, defender.ownerId, interactionId),
+        };
       }
 
       session.turnNumber += 1;
       session.activeTurnOwnerId = defender.ownerId;
-      session.recentLogs = session.recentLogs.slice(-4);
+      session.recentLogs = session.recentLogs.slice(-5);
       return { ok: true, battle: toView(session) };
     }
 
-    // PvE / Gym: lượt của người chơi + AI phản công (theo thứ tự Speed)
-    const rollAi = Math.random();
-    const aiAction: BattleMoveAction =
-      session.fighterB.hp < session.fighterB.maxHp * 0.35 &&
-      session.fighterB.recoverUsesLeft > 0 &&
-      rollAi < 0.55
-        ? 'recover'
-        : session.fighterB.ultimateCooldown === 0 && rollAi < 0.45
-          ? 'ultimate'
-          : rollAi < 0.72
-            ? 'secondary'
-            : 'primary';
-
-    const playerGoesFirst = session.fighterA.spd >= session.fighterB.spd;
+    // PvE / Challenger: lượt người chơi + AI tính toán tốc độ thực (gồm ưu tiên & Flying +15% & Tê Liệt)
+    const aiSlot = pickAiSlot(session.fighterB, session.fighterA);
+    const playerSpeed = getEffectiveSpeed(session.fighterA, action.slotIndex);
+    const aiSpeed = getEffectiveSpeed(session.fighterB, aiSlot);
+    const playerGoesFirst = playerSpeed >= aiSpeed;
     const roundLogs: string[] = [];
 
     if (playerGoesFirst) {
-      const pRes = executeMove(session.fighterA, session.fighterB, action);
+      const pRes = executeMove(session.fighterA, session.fighterB, action.slotIndex, true);
       roundLogs.push(pRes.logLine);
-      if (session.fighterB.hp > 0) {
-        const aiRes = executeMove(session.fighterB, session.fighterA, aiAction);
+      if (session.fighterB.hp > 0 && session.fighterA.hp > 0) {
+        const aiRes = executeMove(session.fighterB, session.fighterA, aiSlot, false);
         roundLogs.push(aiRes.logLine);
       }
     } else {
-      const aiRes = executeMove(session.fighterB, session.fighterA, aiAction);
+      const aiRes = executeMove(session.fighterB, session.fighterA, aiSlot, true);
       roundLogs.push(aiRes.logLine);
-      if (session.fighterA.hp > 0) {
-        const pRes = executeMove(session.fighterA, session.fighterB, action);
+      if (session.fighterA.hp > 0 && session.fighterB.hp > 0) {
+        const pRes = executeMove(session.fighterA, session.fighterB, action.slotIndex, false);
         roundLogs.push(pRes.logLine);
       }
+    }
+
+    // Xử lý DoT (Bỏng / Trúng Độc) cuối lượt nếu cả 2 còn sống
+    if (session.fighterA.hp > 0 && session.fighterB.hp > 0) {
+      const dotA = applyEndOfRoundStatus(session.fighterA);
+      if (dotA) roundLogs.push(dotA);
+      const dotB = applyEndOfRoundStatus(session.fighterB);
+      if (dotB) roundLogs.push(dotB);
     }
 
     session.recentLogs = roundLogs;
 
     if (session.fighterB.hp <= 0) {
-      session.status = 'FINISHED';
-      session.winnerOwnerId = session.fighterA.ownerId;
-      session.reward = await this.awardVictory(
-        session,
-        session.fighterA.ownerId,
-        session.fighterACreatureId,
-        interactionId,
-      );
-      const view = toView(session);
-      this.activeBattles.delete(battleId);
-      return { ok: true, battle: view };
+      return {
+        ok: true,
+        battle: await this.finalizeSessionWinner(session, session.fighterA.ownerId, interactionId),
+      };
     }
 
     if (session.fighterA.hp <= 0) {
-      session.status = 'FINISHED';
-      session.winnerOwnerId = session.fighterB.ownerId;
-      const view = toView(session);
-      this.activeBattles.delete(battleId);
-      return { ok: true, battle: view };
+      return {
+        ok: true,
+        battle: await this.finalizeSessionWinner(session, session.fighterB.ownerId, interactionId),
+      };
     }
 
     session.turnNumber += 1;
@@ -703,7 +876,7 @@ export class BattleService {
 
         let coinsEarned = 400 + session.fighterB.level * 25;
         let trainerXpEarned = 75 + session.fighterB.level * 4;
-        const buddyXpEarned = session.mode === 'GYM' ? 50 : 40;
+        const buddyXpEarned = session.mode === 'GYM' ? 55 : 40;
         let firstClearBadgeName: string | undefined;
         let bonusBallId: BallId | undefined;
         let bonusBallQty: number | undefined;
@@ -714,7 +887,7 @@ export class BattleService {
           if (isFirstClear) {
             nextBadges.push(session.gymSpec.badgeId);
             coinsEarned = session.gymSpec.rewardCoins;
-            trainerXpEarned = 200 + session.gymSpec.stage * 80;
+            trainerXpEarned = 180 + session.gymSpec.stage * 70;
             firstClearBadgeName = session.gymSpec.badgeName;
             bonusBallId = session.gymSpec.rewardBall;
             bonusBallQty = session.gymSpec.rewardQty;
@@ -732,7 +905,7 @@ export class BattleService {
             });
           } else {
             coinsEarned = Math.round(session.gymSpec.rewardCoins * 0.25);
-            trainerXpEarned = 110 + session.gymSpec.stage * 20;
+            trainerXpEarned = 100 + session.gymSpec.stage * 20;
           }
         } else if (session.mode === 'PVP') {
           coinsEarned = 800;
@@ -767,7 +940,7 @@ export class BattleService {
         const meta: Prisma.InputJsonObject = {
           battleId: session.battleId,
           mode: session.mode,
-          ...(session.gymSpec ? { gymStage: session.gymSpec.stage } : {}),
+          ...(session.gymSpec ? { challengerStage: session.gymSpec.stage } : {}),
         };
 
         await tx.economyTransaction.create({
@@ -798,14 +971,31 @@ export class BattleService {
     return summary;
   }
 
-  public getGymOverview(ownedBadges: readonly string[]): readonly (GymLeaderSpec & {
-    readonly cleared: boolean;
-  })[] {
+  public getChallengerOverview(
+    ownedBadges: readonly string[],
+  ): readonly ChallengerOverviewItem[] {
     const ownedSet = new Set(ownedBadges);
-    return GYM_LEADERS.map((g) => ({
-      ...g,
-      cleared: ownedSet.has(g.badgeId),
-    }));
+    return CHALLENGER_ROSTER.map((spec, idx) => {
+      const species = defaultCreatureCatalog.getById(spec.speciesId);
+      const cleared = ownedSet.has(spec.badgeId);
+      const prevSpec = idx > 0 ? CHALLENGER_ROSTER[idx - 1] : undefined;
+      const unlocked =
+        spec.stage <= 3 ||
+        cleared ||
+        Boolean(prevSpec && ownedSet.has(prevSpec.badgeId));
+
+      return {
+        ...spec,
+        cleared,
+        unlocked,
+        speciesName: species?.name ?? `Pokémon #${spec.speciesId}`,
+        speciesTypes: species?.types ?? ['Normal'],
+      };
+    });
+  }
+
+  public countOfficialGymBadges(ownedBadges: readonly string[]): number {
+    return ownedBadges.filter((id) => OFFICIAL_GYM_BADGE_IDS.has(id)).length;
   }
 }
 

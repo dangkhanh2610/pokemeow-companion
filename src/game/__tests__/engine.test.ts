@@ -3,19 +3,28 @@ import { describe, it } from 'node:test';
 import { BALL_CATALOG, getBallSpec, resolveBallId } from '../catalog/ball-catalog';
 import { defaultCreatureCatalog, PokemonCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-catalog';
 import { getWaterPools, resolveBaitId, resolveRodId, ROD_CATALOG } from '../catalog/fishing-catalog';
+import { getSpeciesMovePool, resolveEquippedMoves } from '../catalog/move-catalog';
 import {
   analyzeDefensiveMatchups,
+  applyEndOfRoundStatus,
   buildCombatant,
   computeComputedStats,
   executeMove,
+  getEffectiveSpeed,
   getTypeEffectiveness,
 } from '../engine/battle-engine';
+import { CHALLENGER_ROSTER } from '../services/battle-service';
 import { CatchStrategyRegistry } from '../engine/catch-strategy';
 import { applyXp, computeIvSummary, SHINY_CHANCE, SpawnEngine, xpForNextLevel } from '../engine/spawn-engine';
 import { rollNextCaptchaThreshold } from '../services/captcha-service';
 import { ENCOUNTER_NETWORK_GRACE_MS, ENCOUNTER_TTL_MS } from '../services/encounter-service';
 import { addCreatureXp, getEvolutionBranches } from '../services/evolution-service';
 import { isChannelAllowed, validatePrefix } from '../services/guild-config-service';
+import {
+  parseBoxCommandArgs,
+  sortBoxCreatures,
+  type SortableBoxCreature,
+} from '../services/trainer-service';
 
 describe('PokéVerse RPG Core Engine', () => {
   it('PokemonCreatureCatalog tải đủ 1,025 loài gốc + các dạng Mega/Gmax/Regional/Special', () => {
@@ -295,43 +304,184 @@ describe('PokéVerse RPG Core Engine', () => {
     });
     assert.equal(masterWithBuddy, 1.0);
 
-    // 4. Turn-based battle engine & type chart
+    // 4. Exact type effectiveness chart (including 0x immunities), Dragon Self-Hit trait & status effects
     assert.equal(getTypeEffectiveness('Water', ['Fire']), 2);
     assert.equal(getTypeEffectiveness('Fire', ['Water']), 0.5);
-    assert.equal(getTypeEffectiveness('Electric', ['Ground']), 0.2);
+    assert.equal(getTypeEffectiveness('Electric', ['Ground']), 0);
+    assert.equal(getTypeEffectiveness('Dragon', ['Fairy']), 0);
 
     const blastoise = defaultCreatureCatalog.getById(9)!;
     const charizard = defaultCreatureCatalog.getById(6)!;
+    const dragonite = defaultCreatureCatalog.getById(149)!;
     const ivs = { hp: 20, atk: 20, def: 20, spAtk: 20, spDef: 20, spd: 20 };
+
+    // Default combatant has strictly 2 starter moves until buying more in the Skill Shop
     const combatA = buildCombatant(blastoise, ivs, 36, false, 'u1', 'PlayerA');
     const combatB = buildCombatant(charizard, ivs, 36, false, 'u2', 'PlayerB');
+    assert.equal(combatA.moves.length, 2);
 
-    const hitRes = executeMove(combatA, combatB, 'primary', () => 0.5);
+    const hitRes = executeMove(combatA, combatB, 0, true, () => 0.5);
     assert.equal(hitRes.hit, true);
     assert.ok(hitRes.damageDealt > 0);
     assert.ok(combatB.hp < combatB.maxHp);
 
-    // 5. Inspector stats, 4-skill moveset & defensive type matchups
+    // Unlocking & equipping extra moves expands slots up to 4
+    const blastPool = getSpeciesMovePool(blastoise);
+    assert.ok(blastPool.shopMoves.length >= 6);
+    const customEquipped = resolveEquippedMoves(
+      blastoise,
+      [
+        blastPool.starterMoves[0].id,
+        blastPool.starterMoves[1].id,
+        blastPool.shopMoves[0]!.id,
+        blastPool.shopMoves[1]!.id,
+      ],
+      [blastPool.shopMoves[0]!.id, blastPool.shopMoves[1]!.id],
+    );
+    assert.equal(customEquipped.length, 4);
+
+    // Exhaustive check: every species in Pokedex gets 2 starter moves with no shared 0x immunity lock + >=6 shop moves
+    const allTargets = defaultCreatureCatalog.getAll();
+    for (const sp of allTargets) {
+      const pool = getSpeciesMovePool(sp);
+      assert.equal(pool.starterMoves.length, 2, `${sp.name} phải có đúng 2 skill mặc định`);
+      assert.ok(pool.shopMoves.length >= 6, `${sp.name} phải có ít nhất 6 skill trong shop riêng`);
+      const m1EffGhost = getTypeEffectiveness(pool.starterMoves[0].type, ['Ghost']);
+      const m2EffGhost = getTypeEffectiveness(pool.starterMoves[1].type, ['Ghost']);
+      assert.ok(m1EffGhost > 0 || m2EffGhost > 0, `${sp.name} không được kẹt 0x trước Ghost`);
+    }
+
+    // Dragon Type Trait: Self-Hit recoil when RNG rolls < 0.22
+    const combatDragon = buildCombatant(dragonite, ivs, 55, false, 'u3', 'Lance');
+    const dragonHpBefore = combatDragon.hp;
+    const dragonHit = executeMove(combatDragon, combatB, 0, true, () => 0.1);
+    assert.equal(dragonHit.hit, true);
+    assert.ok(dragonHit.selfDamageDealt > 0);
+    assert.equal(combatDragon.hp, dragonHpBefore - dragonHit.selfDamageDealt);
+
+    // End-of-round Poison tick & Paralyze speed reduction
+    const hpBeforePoison = combatA.hp;
+    combatA.status = 'POISON';
+    const poisonLog = applyEndOfRoundStatus(combatA);
+    assert.ok(poisonLog);
+    assert.ok(combatA.hp < hpBeforePoison);
+
+    const normalSpeed = getEffectiveSpeed(combatB);
+    combatB.status = 'PARALYZE';
+    assert.ok(getEffectiveSpeed(combatB) < normalSpeed);
+
+    // Challengers roster validity
+    assert.equal(CHALLENGER_ROSTER.length, 12);
+    for (const challenger of CHALLENGER_ROSTER) {
+      assert.ok(defaultCreatureCatalog.getById(challenger.speciesId), `Missing challenger ${challenger.speciesId}`);
+    }
+
+    // 5. Inspector stats, 2 starter skills & defensive type matchups (with 0x immunities)
     const computedBlastoise = computeComputedStats(blastoise, ivs, 50, false);
     assert.ok(computedBlastoise.combatPower > 0);
-    assert.equal(computedBlastoise.primaryMove.type, 'Water');
-    assert.equal(computedBlastoise.secondaryMove.type, 'Ice');
-    assert.equal(computedBlastoise.ultimateMove.cooldownTurns, 2);
+    assert.equal(computedBlastoise.starterMoves[0].type, 'Water');
+    assert.notEqual(computedBlastoise.starterMoves[1].type, 'Water');
 
-    const secHit = executeMove(combatA, combatB, 'secondary', () => 0.5);
+    const secHit = executeMove(combatA, combatB, 1, true, () => 0.5);
     assert.equal(secHit.hit, true);
     assert.ok(secHit.damageDealt > 0);
 
     const charMatchup = analyzeDefensiveMatchups(['Fire', 'Flying']);
     const rockWeak = charMatchup.weaknesses.find((w) => w.type === 'Rock');
     const grassResist = charMatchup.resistances.find((r) => r.type === 'Grass');
+    const groundImmune = charMatchup.immunities.find((im) => im.type === 'Ground');
     assert.equal(rockWeak?.mult, 4);
     assert.equal(grassResist?.mult, 0.25);
+    assert.equal(groundImmune?.mult, 0);
 
     // 6. Captcha threshold range [80..100]
     for (let i = 0; i < 30; i += 1) {
       const th = rollNextCaptchaThreshold();
       assert.ok(th >= 80 && th <= 100);
     }
+
+    // 7. Box command parser & multi-mode sorting (default rarity)
+    assert.deepEqual(parseBoxCommandArgs([]), { page: 1, sort: 'rarity', filter: '' });
+    assert.deepEqual(parseBoxCommandArgs(['iv', '2']), { page: 2, sort: 'iv', filter: '' });
+    assert.deepEqual(parseBoxCommandArgs(['3', 'lv', 'fire']), {
+      page: 3,
+      sort: 'level',
+      filter: 'fire',
+    });
+    assert.deepEqual(parseBoxCommandArgs(['shiny', 'cp']), {
+      page: 1,
+      sort: 'cp',
+      filter: 'shiny',
+    });
+    assert.deepEqual(parseBoxCommandArgs(['#25']), {
+      page: 1,
+      sort: 'rarity',
+      filter: '#25',
+    });
+
+    const sampleBox: SortableBoxCreature[] = [
+      {
+        id: 'c1',
+        speciesId: 16,
+        speciesName: 'Pidgey',
+        rarity: 'common',
+        isShiny: false,
+        ivTotal: 150,
+        level: 5,
+        caughtAt: new Date(1000),
+      },
+      {
+        id: 'c2',
+        speciesId: 150,
+        speciesName: 'Mewtwo',
+        rarity: 'legendary',
+        isShiny: false,
+        ivTotal: 110,
+        level: 30,
+        caughtAt: new Date(2000),
+      },
+      {
+        id: 'c3',
+        speciesId: 25,
+        speciesName: 'Pikachu',
+        rarity: 'common',
+        isShiny: true,
+        ivTotal: 120,
+        level: 18,
+        caughtAt: new Date(3000),
+      },
+      {
+        id: 'c4',
+        speciesId: 10001,
+        speciesName: 'Venusaur-Mega',
+        rarity: 'mega',
+        isShiny: false,
+        ivTotal: 140,
+        level: 45,
+        caughtAt: new Date(4000),
+      },
+      {
+        id: 'c5',
+        speciesId: 6,
+        speciesName: 'Charizard',
+        rarity: 'rare',
+        isShiny: false,
+        ivTotal: 170,
+        level: 40,
+        caughtAt: new Date(5000),
+      },
+    ];
+
+    const byRarity = sortBoxCreatures(sampleBox, 'rarity').map((c) => c.id);
+    assert.deepEqual(byRarity, ['c4', 'c3', 'c2', 'c5', 'c1']);
+
+    const byIv = sortBoxCreatures(sampleBox, 'iv').map((c) => c.id);
+    assert.deepEqual(byIv, ['c5', 'c1', 'c4', 'c3', 'c2']);
+
+    const byDex = sortBoxCreatures(sampleBox, 'dex').map((c) => c.id);
+    assert.deepEqual(byDex, ['c4', 'c5', 'c1', 'c3', 'c2']);
+
+    const byName = sortBoxCreatures(sampleBox, 'name').map((c) => c.id);
+    assert.deepEqual(byName, ['c5', 'c2', 'c1', 'c3', 'c4']);
   });
 });

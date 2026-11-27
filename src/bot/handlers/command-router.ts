@@ -4,10 +4,11 @@ import {
   type ChatInputCommandInteraction,
   type Message,
   type PermissionsBitField,
+  type StringSelectMenuInteraction,
   type User,
 } from 'discord.js';
 import { resolveBallId } from '@/game/catalog/ball-catalog';
-import type { BattleMoveAction } from '@/game/engine/battle-engine';
+import type { BattleTurnAction } from '@/game/services/battle-service';
 import { battleService } from '@/game/services/battle-service';
 import { captchaService } from '@/game/services/captcha-service';
 import { economyService } from '@/game/services/economy-service';
@@ -26,19 +27,26 @@ import {
 import { leaderboardService } from '@/game/services/leaderboard-service';
 import { marketService } from '@/game/services/market-service';
 import { megaService } from '@/game/services/mega-service';
+import { moveShopService } from '@/game/services/move-shop-service';
 import { questService } from '@/game/services/quest-service';
-import { trainerService, type TrainerIdentityInput } from '@/game/services/trainer-service';
+import {
+  parseBoxCommandArgs,
+  resolveBoxSortMode,
+  trainerService,
+  type BoxSortMode,
+  type TrainerIdentityInput,
+} from '@/game/services/trainer-service';
 import type { BallId, CreatureSpecies, LeaderboardMetric, ThrowBallOutcome } from '@/game/types';
 import { botEmojiRegistry } from '../emoji-registry';
 import {
   buildBagEmbed,
   buildBotStatusEmbed,
+  buildBoxComponents,
+  buildBoxEmbed,
   buildCatchButtonsRow,
   buildCatchResultEmbed,
   buildChannelSettingsEmbed,
   buildDailyEmbed,
-  buildDexEmbed,
-  buildDexPaginationRow,
   buildExpiredEncounterEmbed,
   buildHelpEmbed,
   buildLeaderboardEmbed,
@@ -63,6 +71,8 @@ import {
   buildCaptchaButtonsRow,
   buildCaptchaEmbed,
   buildCaptchaSuccessEmbed,
+  buildChallengerListEmbed,
+  buildChallengerSelectRow,
   buildCreatureInspectButtons,
   buildCreatureInspectEmbed,
   buildErrorNotice,
@@ -73,12 +83,13 @@ import {
   buildFishingExpiredEmbed,
   buildFishingPullRow,
   buildFishingShopEmbed,
-  buildGymListEmbed,
   buildMarketBrowseEmbed,
   buildMarketBuyConfirmEmbed,
   buildMarketBuyConfirmRow,
   buildMarketListSuccessEmbed,
   buildMarketPaginationRow,
+  buildMoveShopEmbed,
+  buildMoveShopSelectRow,
   buildQuestClaimRow,
   buildQuestClaimSuccessEmbed,
   buildQuestsEmbed,
@@ -581,18 +592,17 @@ export class BotCommandRouter {
         return;
       }
 
-      case 'dex': {
+      case 'box': {
         await interaction.deferReply();
         await trainerService.ensureTrainer(meta);
         const page = interaction.options.getInteger('page') ?? 1;
         const filter = interaction.options.getString('filter') ?? '';
-        const dex = await trainerService.getTrainerDex(meta.userId, page, 10, filter);
+        const rawSort = interaction.options.getString('sort') ?? 'rarity';
+        const sort: BoxSortMode = resolveBoxSortMode(rawSort) ?? 'rarity';
+        const box = await trainerService.getTrainerBox(meta.userId, page, 10, filter, sort);
         await interaction.editReply({
-          embeds: [buildDexEmbed(meta.displayName, dex)],
-          components:
-            dex.totalPages > 1
-              ? [buildDexPaginationRow(meta.userId, dex.filter, dex.page, dex.totalPages)]
-              : [],
+          embeds: [buildBoxEmbed(meta.displayName, box, activePrefix)],
+          components: buildBoxComponents(meta.userId, box),
         });
         return;
       }
@@ -954,14 +964,25 @@ export class BotCommandRouter {
         if (sub === 'list') {
           await trainerService.ensureTrainer(meta);
           const profile = await trainerService.getTrainerProfile(meta.userId);
-          const gyms = battleService.getGymOverview(profile?.gymBadges ?? []);
+          const challengers = battleService.getChallengerOverview(profile?.gymBadges ?? []);
           await interaction.editReply({
-            embeds: [buildGymListEmbed(meta.displayName, gyms, activePrefix)],
+            embeds: [buildChallengerListEmbed(meta.displayName, challengers, activePrefix)],
+            components: [buildChallengerSelectRow(meta.userId, challengers)],
           });
           return;
         }
         if (sub === 'gym') {
           const stage = interaction.options.getInteger('stage') ?? undefined;
+          if (stage === undefined) {
+            await trainerService.ensureTrainer(meta);
+            const profile = await trainerService.getTrainerProfile(meta.userId);
+            const challengers = battleService.getChallengerOverview(profile?.gymBadges ?? []);
+            await interaction.editReply({
+              embeds: [buildChallengerListEmbed(meta.displayName, challengers, activePrefix)],
+              components: [buildChallengerSelectRow(meta.userId, challengers)],
+            });
+            return;
+          }
           const res = await battleService.startGym(meta, stage);
           if (!res.ok) {
             await interaction.editReply(buildErrorNotice(res.message));
@@ -999,6 +1020,75 @@ export class BotCommandRouter {
         await interaction.editReply({
           embeds: [buildBattleEmbed(res.battle)],
           components: buildBattleActionRows(res.battle),
+        });
+        return;
+      }
+
+      case 'moves': {
+        await interaction.deferReply();
+        const sub = interaction.options.getSubcommand();
+        const checkIcon = botEmojiRegistry.getCheckMention();
+        if (sub === 'buy') {
+          const moveQuery = interaction.options.getString('move', true);
+          const pokemon = interaction.options.getString('pokemon') ?? undefined;
+          const slot = interaction.options.getInteger('slot') ?? undefined;
+          const res = await moveShopService.buyMove(
+            meta,
+            pokemon,
+            moveQuery,
+            slot,
+            `slash-msbuy:${interaction.id}`,
+          );
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          const slotNote = res.equippedSlot ? ` & tự động lắp vào **Ô #${res.equippedSlot}**` : '';
+          await interaction.editReply({
+            embeds: [
+              buildMoveShopEmbed(
+                meta.displayName,
+                res.view,
+                activePrefix,
+                `${checkIcon} Đã mua **${res.boughtMove.name}** (-**${res.spentCoins.toLocaleString('en-US')} PC**)${slotNote}!`,
+              ),
+            ],
+            components: [buildMoveShopSelectRow(meta.userId, res.view)],
+          });
+          return;
+        }
+        if (sub === 'equip') {
+          const moveQuery = interaction.options.getString('move', true);
+          const slot = interaction.options.getInteger('slot', true);
+          const pokemon = interaction.options.getString('pokemon') ?? undefined;
+          const res = await moveShopService.equipMove(meta, pokemon, moveQuery, slot);
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({
+            embeds: [
+              buildMoveShopEmbed(
+                meta.displayName,
+                res.view,
+                activePrefix,
+                `${checkIcon} Đã lắp **${res.equippedMove.name}** vào **Ô #${res.slot}**!`,
+              ),
+            ],
+            components: [buildMoveShopSelectRow(meta.userId, res.view)],
+          });
+          return;
+        }
+        await trainerService.ensureTrainer(meta);
+        const pokemon = interaction.options.getString('pokemon') ?? undefined;
+        const shopRes = await moveShopService.getMoveShop(meta.userId, pokemon);
+        if (!shopRes.ok) {
+          await interaction.editReply(buildErrorNotice(shopRes.message));
+          return;
+        }
+        await interaction.editReply({
+          embeds: [buildMoveShopEmbed(meta.displayName, shopRes.view, activePrefix)],
+          components: [buildMoveShopSelectRow(meta.userId, shopRes.view)],
         });
         return;
       }
@@ -1060,7 +1150,7 @@ export class BotCommandRouter {
         await interaction.editReply({
           embeds: [buildCreatureInspectEmbed(meta.displayName, view, activePrefix)],
           components:
-            view.kind === 'OWNED' ? [buildCreatureInspectButtons(meta.userId, view)] : [],
+            view.kind === 'OWNED' ? buildCreatureInspectButtons(meta.userId, view) : [],
         });
         return;
       }
@@ -1271,29 +1361,46 @@ export class BotCommandRouter {
         return;
       }
 
+      case 'box':
+      case 'bx': {
+        await trainerService.ensureTrainer(meta);
+        const parsed = parseBoxCommandArgs(parts.slice(1));
+        const box = await trainerService.getTrainerBox(
+          meta.userId,
+          parsed.page,
+          10,
+          parsed.filter,
+          parsed.sort,
+        );
+        await message.reply({
+          embeds: [buildBoxEmbed(meta.displayName, box, settings.prefix)],
+          components: buildBoxComponents(meta.userId, box),
+        });
+        return;
+      }
+
       case 'd':
       case 'dex':
       case 'pokedex': {
         await trainerService.ensureTrainer(meta);
-        let page = 1;
-        let filter = '';
-        if (arg1) {
-          if (/^\d+$/.test(arg1)) {
-            page = Math.max(1, Number.parseInt(arg1, 10));
-            filter = parts.slice(2).join(' ');
-          } else {
-            filter = arg1;
-            const maybePage = arg2 && /^\d+$/.test(arg2) ? Number.parseInt(arg2, 10) : 1;
-            page = Math.max(1, maybePage);
-          }
+        const query = parts.slice(1).join(' ').trim();
+        if (!query) {
+          await message.reply(
+            `Để xem danh sách Pokémon đã bắt, hãy dùng \`${settings.prefix}box [sort|lọc]\` (mặc định theo **Rarity**). Để tra cứu chi tiết loài, dùng \`${settings.prefix}dex <tên_pokemon>\` hoặc \`${settings.prefix}info <tên|#mã>\`.`,
+          );
+          return;
         }
-        const dex = await trainerService.getTrainerDex(meta.userId, page, 10, filter);
+        const view = await trainerService.inspectCreature(meta.userId, query);
+        if (!view) {
+          await message.reply(
+            buildErrorNotice(`Không tìm thấy Pokémon nào khớp với \`${query}\` trong kho lẫn Pokédex.`),
+          );
+          return;
+        }
         await message.reply({
-          embeds: [buildDexEmbed(meta.displayName, dex)],
+          embeds: [buildCreatureInspectEmbed(meta.displayName, view, settings.prefix)],
           components:
-            dex.totalPages > 1
-              ? [buildDexPaginationRow(meta.userId, dex.filter, dex.page, dex.totalPages)]
-              : [],
+            view.kind === 'OWNED' ? buildCreatureInspectButtons(meta.userId, view) : [],
         });
         return;
       }
@@ -1620,23 +1727,34 @@ export class BotCommandRouter {
 
       case 'bt':
       case 'battle':
-      case 'gym': {
-        const isGymCmd = command === 'gym';
+      case 'gym':
+      case 'npc':
+      case 'challenger':
+      case 'challengers': {
+        const isGymCmd =
+          command === 'gym' ||
+          command === 'npc' ||
+          command === 'challenger' ||
+          command === 'challengers';
         const sub = isGymCmd ? 'gym' : (arg1?.toLowerCase() ?? 'pve');
         const gymArg = isGymCmd ? arg1 : arg2;
 
-        if (sub === 'list' || sub === 'gyms') {
+        if (
+          sub === 'list' ||
+          sub === 'gyms' ||
+          (sub === 'gym' && !(gymArg && /^\d+$/.test(gymArg)))
+        ) {
           await trainerService.ensureTrainer(meta);
           const profile = await trainerService.getTrainerProfile(meta.userId);
-          const gyms = battleService.getGymOverview(profile?.gymBadges ?? []);
+          const challengers = battleService.getChallengerOverview(profile?.gymBadges ?? []);
           await message.reply({
-            embeds: [buildGymListEmbed(meta.displayName, gyms, settings.prefix)],
+            embeds: [buildChallengerListEmbed(meta.displayName, challengers, settings.prefix)],
+            components: [buildChallengerSelectRow(meta.userId, challengers)],
           });
           return;
         }
         if (sub === 'gym') {
-          const stage =
-            gymArg && /^\d+$/.test(gymArg) ? Number.parseInt(gymArg, 10) : undefined;
+          const stage = Number.parseInt(gymArg!, 10);
           const res = await battleService.startGym(meta, stage);
           if (!res.ok) {
             await message.reply(buildErrorNotice(res.message));
@@ -1681,6 +1799,95 @@ export class BotCommandRouter {
         await message.reply({
           embeds: [buildBattleEmbed(res.battle)],
           components: buildBattleActionRows(res.battle),
+        });
+        return;
+      }
+
+      case 'ms':
+      case 'moves':
+      case 'moveshop':
+      case 'skill':
+      case 'skills':
+      case 'learn':
+      case 'tm': {
+        await trainerService.ensureTrainer(meta);
+        const checkIcon = botEmojiRegistry.getCheckMention();
+        const sub = arg1?.toLowerCase();
+
+        if (sub === 'buy' || sub === 'b') {
+          const moveQuery = arg2;
+          if (!moveQuery) {
+            await message.reply(
+              `Cách dùng: \`${settings.prefix}ms buy <số|tên_chiêu> [tên_pokemon|#mã]\` (vd: \`${settings.prefix}ms buy 1\`).`,
+            );
+            return;
+          }
+          const pokemon = parts.slice(3).join(' ').trim() || undefined;
+          const res = await moveShopService.buyMove(
+            meta,
+            pokemon,
+            moveQuery,
+            undefined,
+            `msg-msbuy:${message.id}`,
+          );
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          const slotNote = res.equippedSlot ? ` & lắp vào **Ô #${res.equippedSlot}**` : '';
+          await message.reply({
+            embeds: [
+              buildMoveShopEmbed(
+                meta.displayName,
+                res.view,
+                settings.prefix,
+                `${checkIcon} Đã mua **${res.boughtMove.name}** (-**${res.spentCoins.toLocaleString('en-US')} PC**)${slotNote}!`,
+              ),
+            ],
+            components: [buildMoveShopSelectRow(meta.userId, res.view)],
+          });
+          return;
+        }
+
+        if (sub === 'equip' || sub === 'eq') {
+          const moveQuery = arg2;
+          const rawSlot = parts[3];
+          const slot = rawSlot && /^\d+$/.test(rawSlot) ? Number.parseInt(rawSlot, 10) : 0;
+          if (!moveQuery || slot < 1 || slot > 4) {
+            await message.reply(
+              `Cách dùng: \`${settings.prefix}ms equip <số|tên_chiêu> <ô_1-4> [tên_pokemon|#mã]\`.`,
+            );
+            return;
+          }
+          const pokemon = parts.slice(4).join(' ').trim() || undefined;
+          const res = await moveShopService.equipMove(meta, pokemon, moveQuery, slot);
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({
+            embeds: [
+              buildMoveShopEmbed(
+                meta.displayName,
+                res.view,
+                settings.prefix,
+                `${checkIcon} Đã lắp **${res.equippedMove.name}** vào **Ô #${res.slot}**!`,
+              ),
+            ],
+            components: [buildMoveShopSelectRow(meta.userId, res.view)],
+          });
+          return;
+        }
+
+        const pokemonQuery = parts.slice(1).join(' ').trim() || undefined;
+        const shopRes = await moveShopService.getMoveShop(meta.userId, pokemonQuery);
+        if (!shopRes.ok) {
+          await message.reply(buildErrorNotice(shopRes.message));
+          return;
+        }
+        await message.reply({
+          embeds: [buildMoveShopEmbed(meta.displayName, shopRes.view, settings.prefix)],
+          components: [buildMoveShopSelectRow(meta.userId, shopRes.view)],
         });
         return;
       }
@@ -1764,7 +1971,7 @@ export class BotCommandRouter {
         await message.reply({
           embeds: [buildCreatureInspectEmbed(meta.displayName, view, settings.prefix)],
           components:
-            view.kind === 'OWNED' ? [buildCreatureInspectButtons(meta.userId, view)] : [],
+            view.kind === 'OWNED' ? buildCreatureInspectButtons(meta.userId, view) : [],
         });
         return;
       }
@@ -1785,7 +1992,7 @@ export class BotCommandRouter {
           await message.reply({
             embeds: [buildCreatureInspectEmbed(meta.displayName, view, settings.prefix)],
             components:
-              view.kind === 'OWNED' ? [buildCreatureInspectButtons(meta.userId, view)] : [],
+              view.kind === 'OWNED' ? buildCreatureInspectButtons(meta.userId, view) : [],
           });
           return;
         }
@@ -1879,34 +2086,33 @@ export class BotCommandRouter {
       return;
     }
 
-    if (interaction.customId.startsWith('dex:')) {
+    if (interaction.customId.startsWith('boxpage:')) {
       await interaction.deferUpdate();
       const parts = interaction.customId.split(':');
       const ownerId = parts[1];
       const targetPage = Number.parseInt(parts[2] ?? '1', 10);
-      const filter = decodeURIComponent(parts[3] ?? '');
+      const sort = resolveBoxSortMode(parts[3] ?? 'rarity') ?? 'rarity';
+      const filter = decodeURIComponent(parts[4] ?? '');
 
       if (!ownerId || ownerId !== interaction.user.id) {
         await interaction.followUp({
-          content: `${crossIcon} Bạn không thể lật trang Pokédex của huấn luyện viên khác!`,
+          content: `${crossIcon} Bạn không thể lật trang kho Pokémon của huấn luyện viên khác!`,
           ephemeral: true,
         });
         return;
       }
 
       const meta = extractTrainerMeta(interaction.user);
-      const dex = await trainerService.getTrainerDex(
+      const box = await trainerService.getTrainerBox(
         ownerId,
         Number.isNaN(targetPage) ? 1 : targetPage,
         10,
         filter,
+        sort,
       );
       await interaction.editReply({
-        embeds: [buildDexEmbed(meta.displayName, dex)],
-        components:
-          dex.totalPages > 1
-            ? [buildDexPaginationRow(ownerId, dex.filter, dex.page, dex.totalPages)]
-            : [],
+        embeds: [buildBoxEmbed(meta.displayName, box, this.defaultPrefix)],
+        components: buildBoxComponents(ownerId, box),
       });
       return;
     }
@@ -2089,6 +2295,19 @@ export class BotCommandRouter {
 
       const meta = extractTrainerMeta(interaction.user);
 
+      if (action === 'ms') {
+        const shopRes = await moveShopService.getMoveShopByCreatureId(ownerId, arg);
+        if (!shopRes.ok) {
+          await interaction.followUp({ content: buildErrorNotice(shopRes.message), ephemeral: true });
+          return;
+        }
+        await interaction.followUp({
+          embeds: [buildMoveShopEmbed(meta.displayName, shopRes.view, this.defaultPrefix)],
+          components: [buildMoveShopSelectRow(ownerId, shopRes.view)],
+        });
+        return;
+      }
+
       if (action === 'nav') {
         const offsetIdx = Number.parseInt(arg, 10);
         const view = await trainerService.inspectOwnedByOffset(
@@ -2104,7 +2323,7 @@ export class BotCommandRouter {
         }
         await interaction.editReply({
           embeds: [buildCreatureInspectEmbed(meta.displayName, view, this.defaultPrefix)],
-          components: [buildCreatureInspectButtons(ownerId, view)],
+          components: buildCreatureInspectButtons(ownerId, view),
         });
         return;
       }
@@ -2140,7 +2359,7 @@ export class BotCommandRouter {
       }
       await interaction.editReply({
         embeds: [buildCreatureInspectEmbed(meta.displayName, refreshed, this.defaultPrefix)],
-        components: [buildCreatureInspectButtons(ownerId, refreshed)],
+        components: buildCreatureInspectButtons(ownerId, refreshed),
       });
       return;
     }
@@ -2172,8 +2391,12 @@ export class BotCommandRouter {
         return;
       }
 
-      const rawMove = sub === 'forfeit' ? 'forfeit' : (parts[3] as BattleMoveAction | undefined);
-      const action: BattleMoveAction | 'forfeit' = rawMove ?? 'primary';
+      const slotIndex = Number.parseInt(parts[3] ?? '0', 10);
+      const action: BattleTurnAction =
+        sub === 'forfeit'
+          ? { kind: 'forfeit' }
+          : { kind: 'slot', slotIndex: Number.isNaN(slotIndex) ? 0 : slotIndex };
+
       const res = await battleService.takeTurn(
         battleId,
         interaction.user.id,
@@ -2276,5 +2499,133 @@ export class BotCommandRouter {
         buildCatchButtonsRow(encounterId, outcome.remainingBalls ?? emptyInventory, true, btnPrefix),
       ],
     });
+  }
+
+  public async handleSelectMenuInteraction(
+    interaction: StringSelectMenuInteraction,
+  ): Promise<void> {
+    const crossIcon = botEmojiRegistry.getCrossMention();
+    const checkIcon = botEmojiRegistry.getCheckMention();
+
+    if (interaction.customId.startsWith('boxsort:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const ownerId = parts[1];
+      const filter = decodeURIComponent(parts[2] ?? '');
+
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: `${crossIcon} Bạn không thể đổi sắp xếp kho Pokémon của người khác!`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const selectedSort: BoxSortMode =
+        resolveBoxSortMode(interaction.values[0] ?? 'rarity') ?? 'rarity';
+      const meta = extractTrainerMeta(interaction.user);
+      const box = await trainerService.getTrainerBox(ownerId, 1, 10, filter, selectedSort);
+
+      await interaction.editReply({
+        embeds: [buildBoxEmbed(meta.displayName, box, this.defaultPrefix)],
+        components: buildBoxComponents(ownerId, box),
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith('gympick:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const ownerId = parts[1];
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: `${crossIcon} Bạn không thể chọn Challenger trên bảng của người chơi khác!`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const stage = Number.parseInt(interaction.values[0] ?? '1', 10);
+      const meta = extractTrainerMeta(interaction.user);
+      const res = await battleService.startGym(meta, Number.isNaN(stage) ? 1 : stage);
+      if (!res.ok) {
+        await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+        return;
+      }
+
+      await interaction.editReply({
+        embeds: [buildBattleEmbed(res.battle)],
+        components: buildBattleActionRows(res.battle),
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith('msbuy:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const ownerId = parts[1];
+      const creatureId = parts[2];
+      if (!ownerId || !creatureId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: `${crossIcon} Bạn không thể mua kỹ năng cho Pokémon của người khác!`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const moveId = interaction.values[0] ?? '';
+      const meta = extractTrainerMeta(interaction.user);
+      const currentShop = await moveShopService.getMoveShopByCreatureId(ownerId, creatureId);
+      if (!currentShop.ok) {
+        await interaction.followUp({ content: buildErrorNotice(currentShop.message), ephemeral: true });
+        return;
+      }
+
+      const alreadyUnlocked = currentShop.view.unlockedMoveIds.includes(moveId);
+      if (alreadyUnlocked) {
+        const eqRes = await moveShopService.equipMoveByCreatureId(meta, creatureId, moveId);
+        if (!eqRes.ok) {
+          await interaction.followUp({ content: buildErrorNotice(eqRes.message), ephemeral: true });
+          return;
+        }
+        await interaction.editReply({
+          embeds: [
+            buildMoveShopEmbed(
+              meta.displayName,
+              eqRes.view,
+              this.defaultPrefix,
+              `${checkIcon} Đã trang bị **${eqRes.equippedMove.name}** vào **Ô #${eqRes.slot}**!`,
+            ),
+          ],
+          components: [buildMoveShopSelectRow(ownerId, eqRes.view)],
+        });
+        return;
+      }
+
+      const buyRes = await moveShopService.buyMoveByCreatureId(
+        meta,
+        creatureId,
+        moveId,
+        undefined,
+        `sel-msbuy:${interaction.id}`,
+      );
+      if (!buyRes.ok) {
+        await interaction.followUp({ content: buildErrorNotice(buyRes.message), ephemeral: true });
+        return;
+      }
+
+      const slotNote = buyRes.equippedSlot ? ` & tự lắp vào **Ô #${buyRes.equippedSlot}**` : '';
+      await interaction.editReply({
+        embeds: [
+          buildMoveShopEmbed(
+            meta.displayName,
+            buyRes.view,
+            this.defaultPrefix,
+            `${checkIcon} Đã mua **${buyRes.boughtMove.name}** (-**${buyRes.spentCoins.toLocaleString('en-US')} PC**)${slotNote}!`,
+          ),
+        ],
+        components: [buildMoveShopSelectRow(ownerId, buyRes.view)],
+      });
+    }
   }
 }

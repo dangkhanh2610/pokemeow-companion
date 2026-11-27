@@ -56,6 +56,8 @@ async function bootstrapBot(): Promise<void> {
         await router.handleSlashCommand(interaction);
       } else if (interaction.isButton()) {
         await router.handleButtonInteraction(interaction);
+      } else if (interaction.isStringSelectMenu()) {
+        await router.handleSelectMenuInteraction(interaction);
       }
     } catch (error) {
       console.error('Lỗi xử lý Interaction:', error);

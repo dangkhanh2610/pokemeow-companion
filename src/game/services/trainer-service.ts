@@ -2,7 +2,19 @@ import { Prisma } from '@prisma/client';
 import { getPrismaClient, withDbRetry } from '@/lib/prisma';
 import { BALL_CATALOG } from '../catalog/ball-catalog';
 import { defaultCreatureCatalog } from '../catalog/creature-catalog';
+import { resolveEquippedMoves, type MoveSpec } from '../catalog/move-catalog';
 import rawEvolutionsData from '../data/evolutions.json';
+
+export const OFFICIAL_GYM_BADGE_IDS: ReadonlySet<string> = new Set([
+  'boulder',
+  'cascade',
+  'thunder',
+  'rainbow',
+  'soul',
+  'marsh',
+  'volcano',
+  'earth',
+]);
 import type { BallId, CreatureIVs, CreatureSpecies, DailyRewardResult } from '../types';
 
 export interface TrainerIdentityInput {
@@ -29,6 +41,7 @@ export interface TrainerBagSummary {
   readonly activeCreatureCount: number;
   readonly fishingRod: string;
   readonly gymBadges: readonly string[];
+  readonly officialGymBadgeCount: number;
   readonly battleWins: number;
   readonly buddy: {
     readonly speciesName: string;
@@ -55,24 +68,52 @@ export interface ShopWalletSummary {
   readonly balls: Readonly<Record<BallId, number>>;
 }
 
-export interface PaginatedDexResult {
-  readonly items: readonly {
-    readonly id: string;
-    readonly speciesId: number;
-    readonly speciesName: string;
-    readonly rarity: string;
-    readonly isShiny: boolean;
-    readonly isFavorite: boolean;
-    readonly ivTotal: number;
-    readonly ivPercent: number;
-    readonly level: number;
-    readonly ballUsed: string;
-    readonly caughtAt: Date;
-  }[];
+export type BoxSortMode =
+  | 'rarity'
+  | 'iv'
+  | 'iv_asc'
+  | 'level'
+  | 'cp'
+  | 'recent'
+  | 'oldest'
+  | 'dex'
+  | 'name';
+
+export const BOX_SORT_LABELS: Readonly<Record<BoxSortMode, string>> = {
+  rarity: 'Độ hiếm (Rarity)',
+  iv: 'IV cao → thấp',
+  iv_asc: 'IV thấp → cao',
+  level: 'Cấp độ cao → thấp',
+  cp: 'Lực chiến (CP)',
+  recent: 'Mới bắt nhất',
+  oldest: 'Cũ nhất',
+  dex: 'Số Pokédex (#Dex)',
+  name: 'Tên A → Z',
+};
+
+export interface BoxItemSummary {
+  readonly id: string;
+  readonly speciesId: number;
+  readonly speciesName: string;
+  readonly rarity: string;
+  readonly isShiny: boolean;
+  readonly isFavorite: boolean;
+  readonly inMarket: boolean;
+  readonly ivTotal: number;
+  readonly ivPercent: number;
+  readonly level: number;
+  readonly ballUsed: string;
+  readonly caughtAt: Date;
+}
+
+export interface PaginatedBoxResult {
+  readonly items: readonly BoxItemSummary[];
   readonly totalCount: number;
   readonly page: number;
   readonly totalPages: number;
   readonly filter: string;
+  readonly sort: BoxSortMode;
+  readonly buddyCreatureId: string | null;
 }
 
 export type ToggleFavoriteResult =
@@ -115,6 +156,8 @@ export interface OwnedCreatureInspectView {
   readonly ivPercent: number;
   readonly ballUsed: BallId;
   readonly caughtAt: Date;
+  readonly equippedMoves: readonly MoveSpec[];
+  readonly unlockedMoveCount: number;
   readonly evolutions: readonly InspectEvolutionBranch[];
   readonly hasMegaForm: boolean;
 }
@@ -202,45 +245,241 @@ export function isBallId(value: string): value is BallId {
   return BALL_CATALOG.some((ball) => ball.id === value);
 }
 
-function buildDexWhereClause(userId: string, rawFilter: string): Prisma.CaughtCreatureWhereInput {
-  const where: Prisma.CaughtCreatureWhereInput = { userId, released: false };
-  const normalized = rawFilter.trim().toLowerCase();
+const BOX_SORT_ALIASES: Readonly<Record<string, BoxSortMode>> = {
+  rarity: 'rarity',
+  rar: 'rarity',
+  r: 'rarity',
+  iv: 'iv',
+  ivs: 'iv',
+  best: 'iv',
+  iv_asc: 'iv_asc',
+  lowiv: 'iv_asc',
+  worst: 'iv_asc',
+  level: 'level',
+  lv: 'level',
+  lvl: 'level',
+  cp: 'cp',
+  bst: 'cp',
+  power: 'cp',
+  recent: 'recent',
+  new: 'recent',
+  latest: 'recent',
+  time: 'recent',
+  oldest: 'oldest',
+  old: 'oldest',
+  dex: 'dex',
+  id: 'dex',
+  num: 'dex',
+  number: 'dex',
+  name: 'name',
+  az: 'name',
+  abc: 'name',
+};
 
-  if (!normalized || normalized === 'all') {
-    return where;
-  }
-  if (normalized === 'shiny') {
-    return { ...where, isShiny: true };
-  }
-  if (normalized === 'fav' || normalized === 'favorite' || normalized === 'favorites') {
-    return { ...where, isFavorite: true };
-  }
-  if (
-    normalized === 'common' ||
-    normalized === 'uncommon' ||
-    normalized === 'rare' ||
-    normalized === 'super_rare' ||
-    normalized === 'legendary' ||
-    normalized === 'mega'
-  ) {
-    return { ...where, rarity: normalized };
-  }
-  if (normalized === 'superrare' || normalized === 'sr') {
-    return { ...where, rarity: 'super_rare' };
-  }
+const RARITY_TIER_ORDER: Readonly<Record<string, number>> = {
+  mega: 6,
+  legendary: 5,
+  super_rare: 4,
+  rare: 3,
+  uncommon: 2,
+  common: 1,
+};
 
-  const numericStr = normalized.replace(/^#/, '');
-  if (/^\d+$/.test(numericStr)) {
-    const parsedNum = Number.parseInt(numericStr, 10);
-    if (Number.isFinite(parsedNum) && parsedNum > 0) {
-      return { ...where, speciesId: parsedNum };
+const ELEMENTAL_TYPES = new Set<string>([
+  'normal',
+  'fire',
+  'water',
+  'electric',
+  'grass',
+  'ice',
+  'fighting',
+  'poison',
+  'ground',
+  'flying',
+  'psychic',
+  'bug',
+  'rock',
+  'ghost',
+  'dragon',
+  'dark',
+  'steel',
+  'fairy',
+]);
+
+export function resolveBoxSortMode(raw: string): BoxSortMode | null {
+  const key = raw.trim().toLowerCase();
+  return BOX_SORT_ALIASES[key] ?? null;
+}
+
+export function parseBoxCommandArgs(tokens: readonly string[]): {
+  readonly page: number;
+  readonly sort: BoxSortMode;
+  readonly filter: string;
+} {
+  let page = 1;
+  let sort: BoxSortMode = 'rarity';
+  let sortAssigned = false;
+  let pageAssigned = false;
+  const remaining: string[] = [];
+
+  for (const rawTok of tokens) {
+    const tok = rawTok.trim();
+    if (!tok) {
+      continue;
     }
+    const maybeSort = resolveBoxSortMode(tok);
+    if (maybeSort && !sortAssigned) {
+      sort = maybeSort;
+      sortAssigned = true;
+      continue;
+    }
+    if (/^\d+$/.test(tok) && !pageAssigned) {
+      page = Math.max(1, Number.parseInt(tok, 10));
+      pageAssigned = true;
+      continue;
+    }
+    remaining.push(tok);
   }
 
   return {
-    ...where,
-    speciesName: { contains: rawFilter.trim(), mode: 'insensitive' },
+    page,
+    sort,
+    filter: remaining.join(' ').trim(),
   };
+}
+
+export interface SortableBoxCreature {
+  readonly id: string;
+  readonly speciesId: number;
+  readonly speciesName: string;
+  readonly rarity: string;
+  readonly isShiny: boolean;
+  readonly ivTotal: number;
+  readonly level: number;
+  readonly caughtAt: Date;
+}
+
+function getBaseTierRank(rarity: string): number {
+  return RARITY_TIER_ORDER[rarity] ?? 0;
+}
+
+function getPrestigeRank(rarity: string, isShiny: boolean): number {
+  const baseTier = getBaseTierRank(rarity);
+  if (rarity === 'mega') {
+    return 70 + (isShiny ? 5 : 0);
+  }
+  if (isShiny) {
+    return 60 + baseTier;
+  }
+  return baseTier * 10;
+}
+
+function estimateCreatureCp(speciesId: number, level: number, ivTotal: number): number {
+  const bst = defaultCreatureCatalog.getById(speciesId)?.baseStats.bst ?? 300;
+  return bst * (1 + level / 50) + ivTotal * 2;
+}
+
+type BoxComparator = (a: SortableBoxCreature, b: SortableBoxCreature) => number;
+
+const BOX_SORT_COMPARATORS: Readonly<Record<BoxSortMode, BoxComparator>> = {
+  rarity: (a, b) =>
+    getPrestigeRank(b.rarity, b.isShiny) - getPrestigeRank(a.rarity, a.isShiny) ||
+    b.ivTotal - a.ivTotal ||
+    b.level - a.level ||
+    b.caughtAt.getTime() - a.caughtAt.getTime(),
+  iv: (a, b) =>
+    b.ivTotal - a.ivTotal ||
+    getPrestigeRank(b.rarity, b.isShiny) - getPrestigeRank(a.rarity, a.isShiny) ||
+    b.level - a.level,
+  iv_asc: (a, b) =>
+    a.ivTotal - b.ivTotal ||
+    b.caughtAt.getTime() - a.caughtAt.getTime(),
+  level: (a, b) =>
+    b.level - a.level ||
+    b.ivTotal - a.ivTotal ||
+    getPrestigeRank(b.rarity, b.isShiny) - getPrestigeRank(a.rarity, a.isShiny),
+  cp: (a, b) =>
+    estimateCreatureCp(b.speciesId, b.level, b.ivTotal) -
+      estimateCreatureCp(a.speciesId, a.level, a.ivTotal) ||
+    b.ivTotal - a.ivTotal,
+  recent: (a, b) => b.caughtAt.getTime() - a.caughtAt.getTime(),
+  oldest: (a, b) => a.caughtAt.getTime() - b.caughtAt.getTime(),
+  dex: (a, b) => {
+    const dexA = defaultCreatureCatalog.getById(a.speciesId)?.dexNumber ?? a.speciesId;
+    const dexB = defaultCreatureCatalog.getById(b.speciesId)?.dexNumber ?? b.speciesId;
+    return dexA - dexB || a.speciesId - b.speciesId || b.ivTotal - a.ivTotal;
+  },
+  name: (a, b) =>
+    a.speciesName.localeCompare(b.speciesName) || b.ivTotal - a.ivTotal,
+};
+
+export function sortBoxCreatures<T extends SortableBoxCreature>(
+  items: readonly T[],
+  mode: BoxSortMode,
+): T[] {
+  const comparator = BOX_SORT_COMPARATORS[mode];
+  return [...items].sort(comparator);
+}
+
+function filterBoxItems(
+  allOwned: readonly BoxItemSummary[],
+  rawFilter: string,
+): BoxItemSummary[] {
+  const q = rawFilter.trim().toLowerCase();
+  if (!q || q === 'all') {
+    return [...allOwned];
+  }
+  if (q === 'shiny') {
+    return allOwned.filter((c) => c.isShiny);
+  }
+  if (q === 'fav' || q === 'favorite' || q === 'favorites') {
+    return allOwned.filter((c) => c.isFavorite);
+  }
+  if (q === 'market' || q === 'locked') {
+    return allOwned.filter((c) => c.inMarket);
+  }
+  if (q === 'dups' || q === 'dup' || q === 'duplicates') {
+    const counts = new Map<number, number>();
+    for (const item of allOwned) {
+      counts.set(item.speciesId, (counts.get(item.speciesId) ?? 0) + 1);
+    }
+    return allOwned.filter((c) => (counts.get(c.speciesId) ?? 0) >= 2);
+  }
+  if (q === 'superrare' || q === 'sr') {
+    return allOwned.filter((c) => c.rarity === 'super_rare');
+  }
+  if (q === 'legend') {
+    return allOwned.filter((c) => c.rarity === 'legendary');
+  }
+  if (
+    q === 'common' ||
+    q === 'uncommon' ||
+    q === 'rare' ||
+    q === 'super_rare' ||
+    q === 'legendary' ||
+    q === 'mega'
+  ) {
+    return allOwned.filter((c) => c.rarity === q);
+  }
+  if (ELEMENTAL_TYPES.has(q)) {
+    return allOwned.filter((c) => {
+      const species = defaultCreatureCatalog.getById(c.speciesId);
+      return Boolean(species?.types.some((t) => t.toLowerCase() === q));
+    });
+  }
+
+  const numericStr = q.replace(/^#/, '');
+  if (/^\d+$/.test(numericStr)) {
+    const num = Number.parseInt(numericStr, 10);
+    if (Number.isFinite(num) && num > 0) {
+      return allOwned.filter((c) => {
+        const species = defaultCreatureCatalog.getById(c.speciesId);
+        return c.speciesId === num || species?.dexNumber === num;
+      });
+    }
+  }
+
+  return allOwned.filter((c) => c.speciesName.toLowerCase().includes(q));
 }
 
 export class TrainerService {
@@ -479,6 +718,7 @@ export class TrainerService {
       activeCreatureCount,
       fishingRod: trainer.fishingRod,
       gymBadges: trainer.gymBadges,
+      officialGymBadgeCount: trainer.gymBadges.filter((b) => OFFICIAL_GYM_BADGE_IDS.has(b)).length,
       battleWins: trainer.battleWins,
       buddy: buddyRow,
       balls,
@@ -486,43 +726,50 @@ export class TrainerService {
     };
   }
 
-  public async getTrainerDex(
+  public async getTrainerBox(
     userId: string,
     page = 1,
     pageSize = 10,
     filter = '',
-  ): Promise<PaginatedDexResult> {
+    sort: BoxSortMode = 'rarity',
+  ): Promise<PaginatedBoxResult> {
     const prisma = getPrismaClient();
     const safePage = Math.max(1, Math.floor(page));
     const safeSize = Math.min(20, Math.max(1, Math.floor(pageSize)));
     const normalizedFilter = filter.trim();
-    const where = buildDexWhereClause(userId, normalizedFilter);
 
-    const totalCount = await withDbRetry(() => prisma.caughtCreature.count({ where }));
+    const [trainer, allOwned] = await withDbRetry(() =>
+      Promise.all([
+        prisma.trainer.findUnique({
+          where: { userId },
+          select: { buddyCreatureId: true },
+        }),
+        prisma.caughtCreature.findMany({
+          where: { userId, released: false },
+          select: {
+            id: true,
+            speciesId: true,
+            speciesName: true,
+            rarity: true,
+            isShiny: true,
+            isFavorite: true,
+            inMarket: true,
+            ivTotal: true,
+            ivPercent: true,
+            level: true,
+            ballUsed: true,
+            caughtAt: true,
+          },
+        }),
+      ]),
+    );
+
+    const filtered = filterBoxItems(allOwned, normalizedFilter);
+    const sorted = sortBoxCreatures(filtered, sort);
+    const totalCount = sorted.length;
     const totalPages = Math.max(1, Math.ceil(totalCount / safeSize));
     const clampedPage = Math.min(safePage, totalPages);
-
-    const items = await withDbRetry(() =>
-      prisma.caughtCreature.findMany({
-        where,
-        orderBy: [{ caughtAt: 'desc' }],
-        skip: (clampedPage - 1) * safeSize,
-        take: safeSize,
-        select: {
-          id: true,
-          speciesId: true,
-          speciesName: true,
-          rarity: true,
-          isShiny: true,
-          isFavorite: true,
-          ivTotal: true,
-          ivPercent: true,
-          level: true,
-          ballUsed: true,
-          caughtAt: true,
-        },
-      }),
-    );
+    const items = sorted.slice((clampedPage - 1) * safeSize, clampedPage * safeSize);
 
     return {
       items,
@@ -530,6 +777,8 @@ export class TrainerService {
       page: clampedPage,
       totalPages,
       filter: normalizedFilter.toLowerCase(),
+      sort,
+      buddyCreatureId: trainer?.buddyCreatureId ?? null,
     };
   }
 
@@ -732,6 +981,8 @@ export class TrainerService {
       readonly ivPercent: number;
       readonly ballUsed: string;
       readonly caughtAt: Date;
+      readonly unlockedMoves: readonly string[];
+      readonly equippedMoves: readonly string[];
     },
     boxIndex: number,
     totalOwned: number,
@@ -743,6 +994,11 @@ export class TrainerService {
     }
     const megaSet = new Set(defaultCreatureCatalog.getMegaForms().map((m) => m.dexNumber));
     const ballUsed: BallId = isBallId(row.ballUsed) ? row.ballUsed : 'pokeball';
+    const resolvedMoves = resolveEquippedMoves(
+      species,
+      row.equippedMoves,
+      row.unlockedMoves,
+    );
     return {
       kind: 'OWNED',
       creatureId: row.id,
@@ -762,6 +1018,8 @@ export class TrainerService {
       ivPercent: row.ivPercent,
       ballUsed,
       caughtAt: row.caughtAt,
+      equippedMoves: resolvedMoves,
+      unlockedMoveCount: row.unlockedMoves.length,
       evolutions: INSPECT_EVOLUTION_MAP[String(species.id)] ?? [],
       hasMegaForm: megaSet.has(species.dexNumber),
     };
@@ -779,12 +1037,9 @@ export class TrainerService {
     };
   }
 
-  public async inspectCreature(
-    userId: string,
-    rawQuery?: string,
-  ): Promise<CreatureInspectResult> {
+  private async fetchRarityOrderedBox(userId: string) {
     const prisma = getPrismaClient();
-    const [trainer, box] = await withDbRetry(() =>
+    const [trainer, rawBox] = await withDbRetry(() =>
       Promise.all([
         prisma.trainer.findUnique({
           where: { userId },
@@ -792,12 +1047,20 @@ export class TrainerService {
         }),
         prisma.caughtCreature.findMany({
           where: { userId, released: false },
-          orderBy: [{ caughtAt: 'desc' }],
         }),
       ]),
     );
+    return {
+      buddyId: trainer?.buddyCreatureId ?? null,
+      box: sortBoxCreatures(rawBox, 'rarity'),
+    };
+  }
 
-    const buddyId = trainer?.buddyCreatureId ?? null;
+  public async inspectCreature(
+    userId: string,
+    rawQuery?: string,
+  ): Promise<CreatureInspectResult> {
+    const { buddyId, box } = await this.fetchRarityOrderedBox(userId);
     const clean = rawQuery?.trim() ?? '';
 
     if (!clean) {
@@ -815,7 +1078,7 @@ export class TrainerService {
 
     const noHash = clean.replace(/^#/, '');
 
-    // 1) Số nguyên: khớp số thứ tự trong kho (;d) nếu hợp lệ, nếu lớn hơn thì tìm theo Dex ID
+    // 1) Số nguyên: khớp số thứ tự trong kho (;box) nếu hợp lệ, nếu lớn hơn thì tìm theo Dex ID
     if (/^\d+$/.test(noHash)) {
       const num = Number.parseInt(noHash, 10);
       if (num >= 1 && num <= box.length && !clean.startsWith('#')) {
@@ -882,20 +1145,7 @@ export class TrainerService {
     userId: string,
     offsetIndex: number,
   ): Promise<OwnedCreatureInspectView | null> {
-    const prisma = getPrismaClient();
-    const [trainer, box] = await withDbRetry(() =>
-      Promise.all([
-        prisma.trainer.findUnique({
-          where: { userId },
-          select: { buddyCreatureId: true },
-        }),
-        prisma.caughtCreature.findMany({
-          where: { userId, released: false },
-          orderBy: [{ caughtAt: 'desc' }],
-        }),
-      ]),
-    );
-
+    const { buddyId, box } = await this.fetchRarityOrderedBox(userId);
     if (box.length === 0) {
       return null;
     }
@@ -904,42 +1154,19 @@ export class TrainerService {
     if (!picked) {
       return null;
     }
-    return this.buildOwnedInspectView(
-      picked,
-      clamped + 1,
-      box.length,
-      trainer?.buddyCreatureId ?? null,
-    );
+    return this.buildOwnedInspectView(picked, clamped + 1, box.length, buddyId);
   }
 
   public async inspectCreatureById(
     userId: string,
     creatureId: string,
   ): Promise<OwnedCreatureInspectView | null> {
-    const prisma = getPrismaClient();
-    const [trainer, box] = await withDbRetry(() =>
-      Promise.all([
-        prisma.trainer.findUnique({
-          where: { userId },
-          select: { buddyCreatureId: true },
-        }),
-        prisma.caughtCreature.findMany({
-          where: { userId, released: false },
-          orderBy: [{ caughtAt: 'desc' }],
-        }),
-      ]),
-    );
-
+    const { buddyId, box } = await this.fetchRarityOrderedBox(userId);
     const idx = box.findIndex((c) => c.id === creatureId);
     if (idx < 0) {
       return null;
     }
-    return this.buildOwnedInspectView(
-      box[idx]!,
-      idx + 1,
-      box.length,
-      trainer?.buddyCreatureId ?? null,
-    );
+    return this.buildOwnedInspectView(box[idx]!, idx + 1, box.length, buddyId);
   }
 
   public async trainSpecificCreature(
