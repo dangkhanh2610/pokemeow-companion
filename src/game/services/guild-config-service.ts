@@ -38,6 +38,10 @@ export function validatePrefix(raw: string): string | null {
 export class GuildConfigService {
   private readonly cache = new Map<string, GuildSettings>();
 
+  public peekCachedSettings(guildId: string): GuildSettings | undefined {
+    return this.cache.get(guildId);
+  }
+
   public async getGuildSettings(
     guildId: string,
     defaultPrefix = ';',

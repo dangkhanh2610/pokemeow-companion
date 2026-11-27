@@ -16,6 +16,12 @@ import type {
   ThrowBallOutcome,
 } from '../types';
 import { captchaService, type CaptchaView } from './captcha-service';
+import {
+  deleteWildPreview,
+  releaseEncounterLock,
+  setWildPreview,
+  tryAcquireEncounterLock,
+} from './activity-lock';
 import { awardBuddyCatchXpInTx } from './evolution-service';
 import { questService } from './quest-service';
 import {
@@ -51,6 +57,7 @@ export type SpawnEncounterOutcome =
       readonly reason:
         | 'COOLDOWN'
         | 'ACTIVE_ENCOUNTER_EXISTS'
+        | 'ACTIVE_FISHING_EXISTS'
         | 'SPAWN_IN_FLIGHT'
         | 'CAPTCHA_REQUIRED';
       readonly remainingMs?: number;
@@ -97,17 +104,14 @@ function buildBallInventoryFromItems(
 }
 
 export class EncounterService {
-  private readonly inFlightSpawns = new Set<string>();
-
   public async spawnWildEncounter(
     userMeta: TrainerIdentityInput,
     channelId: string,
   ): Promise<SpawnEncounterOutcome> {
-    if (this.inFlightSpawns.has(userMeta.userId)) {
+    if (!tryAcquireEncounterLock(userMeta.userId)) {
       return { ok: false, reason: 'SPAWN_IN_FLIGHT' };
     }
 
-    this.inFlightSpawns.add(userMeta.userId);
     try {
       await trainerService.ensureTrainer(userMeta);
 
@@ -145,14 +149,31 @@ export class EncounterService {
               }
             }
 
-            const openEncounter = await tx.activeEncounter.findFirst({
-              where: {
-                userId: userMeta.userId,
-                status: 'OPEN',
-                expiresAt: { gt: now },
-              },
-              orderBy: { createdAt: 'desc' },
-            });
+            const [openEncounter, activeFishing] = await Promise.all([
+              tx.activeEncounter.findFirst({
+                where: {
+                  userId: userMeta.userId,
+                  status: { in: ['OPEN', 'RESOLVING'] },
+                  expiresAt: { gt: now },
+                },
+                orderBy: { createdAt: 'desc' },
+              }),
+              tx.fishingEncounter.findFirst({
+                where: {
+                  userId: userMeta.userId,
+                  status: { in: ['BITING', 'HOOKED', 'RESOLVING'] },
+                  expiresAt: { gt: now },
+                },
+                orderBy: { createdAt: 'desc' },
+              }),
+            ]);
+
+            if (activeFishing) {
+              return {
+                ok: false,
+                reason: 'ACTIVE_FISHING_EXISTS',
+              };
+            }
 
             if (openEncounter) {
               return {
@@ -250,6 +271,13 @@ export class EncounterService {
               },
             });
 
+            setWildPreview(encounter.id, {
+              userId: userMeta.userId,
+              species: roll.species,
+              isShiny: roll.isShiny,
+              expiresAtMs: dbExpiresAt.getTime(),
+            });
+
             return {
               ok: true,
               encounterId: encounter.id,
@@ -273,7 +301,7 @@ export class EncounterService {
         throw error;
       }
     } finally {
-      this.inFlightSpawns.delete(userMeta.userId);
+      releaseEncounterLock(userMeta.userId);
     }
   }
 
@@ -288,9 +316,13 @@ export class EncounterService {
     try {
       const outcome: ThrowBallOutcome = await withDbRetry(() =>
         prisma.$transaction(async (tx) => {
-          const encounter = await tx.activeEncounter.findUnique({
-            where: { id: encounterId },
-          });
+          const [encounter, trainer] = await Promise.all([
+            tx.activeEncounter.findUnique({ where: { id: encounterId } }),
+            tx.trainer.findUnique({
+              where: { userId },
+              include: { inventory: true },
+            }),
+          ]);
 
           if (!encounter) {
             return {
@@ -306,6 +338,10 @@ export class EncounterService {
               reason: 'NOT_OWNER',
               message: 'Bạn không thể ném bóng vào Pokémon của huấn luyện viên khác!',
             };
+          }
+
+          if (!trainer) {
+            throw new Error(`Không tìm thấy Trainer userId=${userId}`);
           }
 
           const now = new Date();
@@ -340,12 +376,14 @@ export class EncounterService {
             throw new InsufficientBallsError(ballId);
           }
 
-          const trainer = await tx.trainer.findUniqueOrThrow({ where: { userId } });
           const species = defaultCreatureCatalog.getById(encounter.speciesId);
 
           if (!species) {
             throw new Error(`Không tìm thấy loài ID=${encounter.speciesId} trong catalog.`);
           }
+
+          const remainingBalls = buildBallInventoryFromItems(trainer.inventory);
+          remainingBalls[ballId] = Math.max(0, remainingBalls[ballId] - 1);
 
           const buddy = trainer.buddyCreatureId
             ? await tx.caughtCreature.findFirst({
@@ -417,6 +455,7 @@ export class EncounterService {
                   species.rarity,
                   encounter.isShiny,
                   'wild',
+                  trainer.teamCreatureIds,
                 )
               : undefined;
 
@@ -455,10 +494,6 @@ export class EncounterService {
               data: { status: 'CAUGHT' },
             });
 
-            const remainingBalls = buildBallInventoryFromItems(
-              await tx.inventoryItem.findMany({ where: { userId } }),
-            );
-
             return {
               ok: true,
               caught: true,
@@ -489,10 +524,6 @@ export class EncounterService {
             data: { status: 'FLED' },
           });
 
-          const remainingBalls = buildBallInventoryFromItems(
-            await tx.inventoryItem.findMany({ where: { userId } }),
-          );
-
           return {
             ok: true,
             caught: false,
@@ -504,6 +535,8 @@ export class EncounterService {
           };
         }),
       );
+
+      deleteWildPreview(encounterId);
 
       if (outcome.ok && outcome.caught) {
         await questService
@@ -530,6 +563,7 @@ export class EncounterService {
   }
 
   public async expireEncounterIfOpen(encounterId: string): Promise<boolean> {
+    deleteWildPreview(encounterId);
     const prisma = getPrismaClient();
     const res = await withDbRetry(() =>
       prisma.activeEncounter.updateMany({

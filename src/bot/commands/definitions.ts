@@ -399,10 +399,10 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
         .addIntegerOption((opt) =>
           opt
             .setName('stage')
-            .setDescription('Số thứ tự Challenger (1 - 12). Bỏ trống = mở menu chọn đối thủ')
+            .setDescription('Số thứ tự Challenger (1 - 13). Bỏ trống = mở menu chọn đối thủ')
             .setRequired(false)
             .setMinValue(1)
-            .setMaxValue(12),
+            .setMaxValue(13),
         ),
     )
     .addSubcommand((sub) =>
@@ -503,6 +503,66 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
         .setName('pokemon')
         .setDescription('Tên Pokémon, số thứ tự kho (;box), #mã ngắn hoặc loài bất kỳ (bỏ trống = Buddy)')
         .setRequired(false),
+    )
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('team')
+    .setDescription('Quản lý đội hình chiến đấu tối đa 3 Pokémon (dùng cho PvE, Gym & PvP)')
+    .addSubcommand((sub) =>
+      sub.setName('view').setDescription('Xem đội hình 3 Pokémon hiện tại của bạn'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('set')
+        .setDescription('Đặt Pokémon vào ô 1, 2 hoặc 3 trong đội hình')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('slot')
+            .setDescription('Vị trí trong đội hình (1 - 3)')
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(3),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('pokemon')
+            .setDescription('Tên Pokémon, số kho (;box) hoặc #mã ngắn')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('add')
+        .setDescription('Thêm nhanh Pokémon vào ô trống tiếp theo trong đội hình')
+        .addStringOption((opt) =>
+          opt
+            .setName('pokemon')
+            .setDescription('Tên Pokémon, số kho (;box) hoặc #mã ngắn')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('swap')
+        .setDescription('Đổi vị trí xuất trận giữa 2 ô trong đội hình')
+        .addIntegerOption((opt) =>
+          opt.setName('from').setDescription('Ô nguồn (1 - 3)').setRequired(true).setMinValue(1).setMaxValue(3),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName('to').setDescription('Ô đích (1 - 3)').setRequired(true).setMinValue(1).setMaxValue(3),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('remove')
+        .setDescription('Gỡ Pokémon khỏi ô 1 - 3 trong đội hình')
+        .addIntegerOption((opt) =>
+          opt.setName('slot').setDescription('Ô muốn gỡ (1 - 3)').setRequired(true).setMinValue(1).setMaxValue(3),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName('auto').setDescription('Tự động chọn 3 Pokémon mạnh nhất (ưu tiên Buddy & CP) vào đội'),
     )
     .toJSON(),
 ];

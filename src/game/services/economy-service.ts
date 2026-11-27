@@ -164,8 +164,14 @@ export class EconomyService {
 
         const trainer = await tx.trainer.findUniqueOrThrow({
           where: { userId: userMeta.userId },
-          select: { buddyCreatureId: true, coins: true },
+          select: { buddyCreatureId: true, teamCreatureIds: true, coins: true },
         });
+
+        const protectedIds = new Set<string>(
+          [trainer.buddyCreatureId, ...trainer.teamCreatureIds].filter(
+            (id): id is string => Boolean(id),
+          ),
+        );
 
         const candidates = await tx.caughtCreature.findMany({
           where: {
@@ -183,17 +189,16 @@ export class EconomyService {
         });
 
         const keptSpecies = new Set<number>();
-        if (trainer.buddyCreatureId) {
-          const buddyRow = candidates.find((c) => c.id === trainer.buddyCreatureId);
-          if (buddyRow) {
-            keptSpecies.add(buddyRow.speciesId);
+        for (const creature of candidates) {
+          if (protectedIds.has(creature.id)) {
+            keptSpecies.add(creature.speciesId);
           }
         }
         const duplicateIds: string[] = [];
         let coinsEarned = 0;
 
         for (const creature of candidates) {
-          if (creature.id === trainer.buddyCreatureId) {
+          if (protectedIds.has(creature.id)) {
             continue;
           }
           const species = defaultCreatureCatalog.getById(creature.speciesId);

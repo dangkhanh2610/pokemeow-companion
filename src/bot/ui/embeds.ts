@@ -290,9 +290,14 @@ export function buildThrowingEmbed(
       iconURL: ball.iconUrl,
     })
     .setTitle(`${shinyPrefix}${species.name}  \`${formatDexNo(species.dexNumber)}\``)
-    .setDescription(`${shakeMention} **${trainerDisplayName}** đã ném **${ball.name}** vào **${species.name}**...`)
+    .setDescription(
+      [
+        ansiBanner(`\u001b[1;33mBÓNG ĐANG RUNG LẮC  ·  CHỜ KẾT QUẢ ${species.name.toUpperCase()}...\u001b[0m`),
+        `${shakeMention} **${trainerDisplayName}** đã ném **${ball.name}**!`,
+      ].join('\n'),
+    )
     .setThumbnail(spriteUrl)
-    .setFooter({ text: 'PokeNyan  ·  Đang chờ kết quả bắt' });
+    .setFooter({ text: 'PokeNyan  ·  Đang thu phục Pokémon' });
 
   if (shakeGifUrl) {
     embed.setImage(shakeGifUrl);
@@ -765,7 +770,8 @@ export function buildHelpEmbed(prefix: string, botName: string): EmbedBuilder {
           `• \`${prefix}i\` / \`${prefix}bal\` / \`${prefix}pf\` — Túi đồ, số dư PC & hồ sơ`,
           `• \`${prefix}mk\` / \`/market\` — Chợ mua bán Pokémon (\`${prefix}mk sell\`, \`${prefix}mk buy\`)`,
           `• \`${prefix}tr\` / \`/trade\` — Trao đổi 2 bước an toàn với người chơi khác`,
-          `• \`${prefix}bt [gym|@user]\` / \`${prefix}gym [số]\` — Chọn Challenger / Đấu 8 Gym / PvP`,
+          `• \`${prefix}bt [gym|@user]\` / \`${prefix}gym [số]\` — Chọn Challenger (3v3) / 8 Gym / PvP`,
+          `• \`${prefix}team [set|add|swap|auto]\` / \`/team\` — Xếp đội hình 3 Pokémon xuất trận`,
           `• \`${prefix}ms [tên]\` / \`/moves\` — Shop Kỹ Năng riêng cho từng Pokémon (mở ô 3 & 4)`,
           `• \`${prefix}r\` / \`${prefix}dl\` / \`${prefix}lb\` — Thả trùng, điểm danh & BXH`,
         ].join('\n'),

@@ -101,7 +101,31 @@ export async function awardBuddyCatchXpInTx(
   caughtRarity: RarityTier,
   caughtIsShiny: boolean,
   source: 'wild' | 'fishing',
+  teamCreatureIds: readonly string[] = [],
 ): Promise<BuddyCatchXpSummary> {
+  const xpGained = calculateBuddyCatchXp(caughtRarity, caughtIsShiny, source);
+
+  // EXP Share: các thành viên khác trong đội hình (;team) nhận 50% EXP khi bắt Pokémon
+  const benchIds = teamCreatureIds.filter((id, idx) => id !== buddy.id && teamCreatureIds.indexOf(id) === idx);
+  if (benchIds.length > 0 && xpGained > 0) {
+    const shareXp = Math.max(10, Math.round(xpGained * 0.5));
+    const benchCreatures = await tx.caughtCreature.findMany({
+      where: { id: { in: benchIds }, released: false, inMarket: false },
+      select: { id: true, xp: true, level: true },
+    });
+    await Promise.all(
+      benchCreatures
+        .filter((c) => c.level < MAX_CREATURE_LEVEL)
+        .map((c) => {
+          const nextBench = addCreatureXp(c.xp, c.level, shareXp);
+          return tx.caughtCreature.update({
+            where: { id: c.id },
+            data: { xp: nextBench.xp, level: nextBench.level },
+          });
+        }),
+    );
+  }
+
   if (buddy.level >= MAX_CREATURE_LEVEL) {
     return {
       buddyName: buddy.speciesName,
@@ -115,7 +139,6 @@ export async function awardBuddyCatchXpInTx(
     };
   }
 
-  const xpGained = calculateBuddyCatchXp(caughtRarity, caughtIsShiny, source);
   const next = addCreatureXp(buddy.xp, buddy.level, xpGained);
   await tx.caughtCreature.update({
     where: { id: buddy.id },

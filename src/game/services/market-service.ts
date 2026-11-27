@@ -106,6 +106,34 @@ function buildMarketWhere(rawFilter: string): Prisma.MarketListingWhereInput {
   };
 }
 
+async function removeCreatureFromTrainerRefs(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  creatureId: string,
+): Promise<void> {
+  const trainer = await tx.trainer.findUnique({
+    where: { userId },
+    select: { buddyCreatureId: true, teamCreatureIds: true },
+  });
+  if (!trainer) {
+    return;
+  }
+  const hasBuddy = trainer.buddyCreatureId === creatureId;
+  const hasInTeam = trainer.teamCreatureIds.includes(creatureId);
+  if (!hasBuddy && !hasInTeam) {
+    return;
+  }
+  await tx.trainer.update({
+    where: { userId },
+    data: {
+      ...(hasBuddy ? { buddyCreatureId: null } : {}),
+      ...(hasInTeam
+        ? { teamCreatureIds: trainer.teamCreatureIds.filter((id) => id !== creatureId) }
+        : {}),
+    },
+  });
+}
+
 async function resolveOwnedCreatureForLock(
   tx: Prisma.TransactionClient,
   userId: string,
@@ -325,16 +353,7 @@ export class MarketService {
           return { ok: false, message: 'Pokémon này vừa được sử dụng trong giao dịch khác.' };
         }
 
-        const seller = await tx.trainer.findUniqueOrThrow({
-          where: { userId: sellerMeta.userId },
-          select: { buddyCreatureId: true },
-        });
-        if (seller.buddyCreatureId === creature.id) {
-          await tx.trainer.update({
-            where: { userId: sellerMeta.userId },
-            data: { buddyCreatureId: null },
-          });
-        }
+        await removeCreatureFromTrainerRefs(tx, sellerMeta.userId, creature.id);
 
         const listing = await tx.marketListing.create({
           data: {
@@ -658,12 +677,7 @@ export class MarketService {
             where: { id: found.id },
             data: { inMarket: true },
           });
-          if (initiatorTrainer.buddyCreatureId === found.id) {
-            await tx.trainer.update({
-              where: { userId: initiatorMeta.userId },
-              data: { buddyCreatureId: null },
-            });
-          }
+          await removeCreatureFromTrainerRefs(tx, initiatorMeta.userId, found.id);
           lockedCreatureId = found.id;
         }
 
@@ -763,12 +777,7 @@ export class MarketService {
             where: { id: found.id },
             data: { inMarket: true },
           });
-          if (actor.buddyCreatureId === found.id) {
-            await tx.trainer.update({
-              where: { userId: actorMeta.userId },
-              data: { buddyCreatureId: null },
-            });
-          }
+          await removeCreatureFromTrainerRefs(tx, actorMeta.userId, found.id);
           nextCreatureId = found.id;
         }
 

@@ -25,6 +25,10 @@ import {
   SpawnEngine,
   xpForNextLevel,
 } from '../engine/spawn-engine';
+import {
+  releaseEncounterLock,
+  tryAcquireEncounterLock,
+} from '../services/activity-lock';
 import { rollNextCaptchaThreshold } from '../services/captcha-service';
 import { ENCOUNTER_NETWORK_GRACE_MS, ENCOUNTER_TTL_MS } from '../services/encounter-service';
 import { addCreatureXp, getEvolutionBranches } from '../services/evolution-service';
@@ -411,11 +415,26 @@ describe('PokéVerse RPG Core Engine', () => {
     combatB.status = 'PARALYZE';
     assert.ok(getEffectiveSpeed(combatB) < normalSpeed);
 
-    // Challengers roster validity
-    assert.equal(CHALLENGER_ROSTER.length, 12);
+    // Challengers roster validity (13 canonical PokéMeow Challengers, 3 Pokémon each)
+    assert.equal(CHALLENGER_ROSTER.length, 13);
+    assert.equal(CHALLENGER_ROSTER[0]?.leaderName, 'Brock');
+    assert.equal(CHALLENGER_ROSTER[7]?.leaderName, 'Giovanni');
+    assert.equal(CHALLENGER_ROSTER[8]?.leaderName, 'Lorelei');
+    assert.equal(CHALLENGER_ROSTER[12]?.leaderName, 'Champion Blue');
     for (const challenger of CHALLENGER_ROSTER) {
+      assert.equal(challenger.lineup.length, 3, `Challenger ${challenger.leaderName} phải có 3 Pokémon`);
+      for (const slot of challenger.lineup) {
+        assert.ok(defaultCreatureCatalog.getById(slot.speciesId), `Missing slot ${slot.speciesId}`);
+      }
       assert.ok(defaultCreatureCatalog.getById(challenger.speciesId), `Missing challenger ${challenger.speciesId}`);
     }
+
+    // Mutual exclusion lock prevents concurrent ;p and ;f spawns for the same user
+    assert.equal(tryAcquireEncounterLock('user-lock-test'), true);
+    assert.equal(tryAcquireEncounterLock('user-lock-test'), false);
+    releaseEncounterLock('user-lock-test');
+    assert.equal(tryAcquireEncounterLock('user-lock-test'), true);
+    releaseEncounterLock('user-lock-test');
 
     // 5. Inspector stats, 2 starter skills & defensive type matchups (with 0x immunities)
     const computedBlastoise = computeComputedStats(blastoise, ivs, 50, false);

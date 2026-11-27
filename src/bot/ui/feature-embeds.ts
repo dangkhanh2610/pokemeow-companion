@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
@@ -39,12 +40,14 @@ import type {
 } from '@/game/services/market-service';
 import type { PokemonMoveShopView } from '@/game/services/move-shop-service';
 import type { ClaimQuestsOutcome, QuestProgressItem, QuestSummary } from '@/game/services/quest-service';
+import type { TeamMemberView, TeamView } from '@/game/services/team-service';
 import type {
   CreatureInspectResult,
   OwnedCreatureInspectView,
 } from '@/game/services/trainer-service';
 import type { BallId, RarityTier } from '@/game/types';
 import { botEmojiRegistry } from '../emoji-registry';
+import { renderBattleSceneAttachment } from './battle-scene';
 
 function formatNumber(n: number): string {
   return n.toLocaleString('en-US');
@@ -666,11 +669,12 @@ function formatChallengerRow(c: ChallengerOverviewItem): string {
     : c.unlocked
       ? `\`[#${c.stage}]\``
       : '`[KHÓA]`';
+  const lineupStr = c.lineupNames.join(' · ');
   const rewardNote = c.cleared
     ? `*Đã hạ (tái đấu ${coinIcon} ${formatNumber(Math.round(c.rewardCoins * 0.25))})*`
     : `${coinIcon} **${formatNumber(c.rewardCoins)}** + ${ballIcon} **${c.rewardQty}x**`;
 
-  return `${prefixMark} ${typeIcons} **${c.leaderName}** · ${c.speciesName} \`Lv.${c.level}\` — ${rewardNote}`;
+  return `${prefixMark} ${typeIcons} **${c.leaderName}** (\`Lv.${c.level}\`) — ${rewardNote}\n└ Đội hình: *${lineupStr}*`;
 }
 
 export function buildChallengerListEmbed(
@@ -678,39 +682,33 @@ export function buildChallengerListEmbed(
   challengers: readonly ChallengerOverviewItem[],
   prefix: string,
 ): EmbedBuilder {
-  const officialGyms = challengers.filter((c) => c.isGymBadge);
+  const officialGyms = challengers.filter((c) => c.tier === 'gym');
   const gymCleared = officialGyms.filter((c) => c.cleared).length;
-  const rookies = challengers.filter((c) => c.tier === 'rookie');
   const elites = challengers.filter((c) => c.tier === 'elite');
 
   return new EmbedBuilder()
     .setColor(0xe11d48)
-    .setTitle(`Danh Sách Challengers & Gym · ${displayName} (${gymCleared}/8 Huy Hiệu)`)
+    .setTitle(`Danh Sách Challengers PokéMeow · ${displayName} (${gymCleared}/8 Huy Hiệu)`)
     .setDescription(
       [
-        `Chọn một **Challenger** từ menu bên dưới để vào trận ngay, hoặc gõ \`${prefix}gym <số>\` (ví dụ \`${prefix}gym 1\`).`,
-        `Mẹo: Mua thêm kỹ năng riêng cho Pokémon tại \`${prefix}ms\` trước khi gặp Gym cao!`,
+        `Đánh bại từng người theo **thứ tự chuẩn PokéMeow** (Gym 1 Brock → Champion Blue). Mỗi Challenger mang đội hình **3 Pokémon**!`,
+        `Chọn ở menu bên dưới hoặc gõ \`${prefix}gym <1-13>\` · Xếp đội hình: \`${prefix}team\``,
       ].join('\n'),
     )
     .addFields(
       {
-        name: 'Tân Thủ & Đối Thủ (#1 – #2)',
-        value: rookies.map(formatChallengerRow).join('\n'),
-        inline: false,
-      },
-      {
-        name: '8 Thủ Lĩnh Gym Kanto (#3 – #10)',
+        name: '8 Thủ Lĩnh Gym Kanto (#1 Brock → #8 Giovanni)',
         value: officialGyms.map(formatChallengerRow).join('\n'),
         inline: false,
       },
       {
-        name: 'Đỉnh Cao Liên Đoàn (#11 – #12)',
+        name: 'Tứ Đại Thiên Vương & Nhà Vô Địch (#9 – #13)',
         value: elites.map(formatChallengerRow).join('\n'),
         inline: false,
       },
     )
     .setFooter({
-      text: `PokeNyan Arena  ·  Mở khóa tuần tự từng Challenger  ·  ${prefix}ms để nâng cấp bộ chiêu`,
+      text: `PokeNyan Arena  ·  Thắng Challenger trước để mở khóa người tiếp theo  ·  ${prefix}ms để mua thêm chiêu`,
     });
 }
 
@@ -742,7 +740,23 @@ export function buildChallengerSelectRow(
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
 }
 
-function formatFighterField(f: CombatantState): string {
+function formatTeamPips(
+  team: readonly CombatantState[],
+  activeIdx: number,
+): string {
+  return team
+    .map((c, idx) => {
+      if (c.hp <= 0) return '⚫';
+      return idx === activeIdx ? '🟢' : '🔵';
+    })
+    .join('');
+}
+
+function formatFighterField(
+  f: CombatantState,
+  team: readonly CombatantState[],
+  activeIdx: number,
+): string {
   const shiny = f.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
   const types = f.species.types
     .map((t) => botEmojiRegistry.getTypeMention(t) || t)
@@ -750,16 +764,21 @@ function formatFighterField(f: CombatantState): string {
   const pct = Math.max(0, Math.round((f.hp / Math.max(1, f.maxHp)) * 100));
   const bar = botEmojiRegistry.buildHpBar(f.hp, f.maxHp, 7);
   const statusTag = formatStatusTag(f.status, f.steelGuardTurns);
+  const aliveCount = team.filter((c) => c.hp > 0).length;
+  const teamBar = `${formatTeamPips(team, activeIdx)} (\`${aliveCount}/${team.length}\`)`;
 
   return [
     `${shiny}**${f.species.name}** \`Lv.${f.level}\` ${types}`,
     `${bar} \`${pct}%\``,
     `HP **${f.hp}/${f.maxHp}**${statusTag}`,
-    `ATK **${f.atk}** · SpA **${f.spAtk}** · DEF **${f.def}** · SPD **${f.spd}**`,
+    `Đội: ${teamBar} · SPD **${f.spd}**`,
   ].join('\n');
 }
 
-export function buildBattleEmbed(battle: BattleSessionView): EmbedBuilder {
+export function buildBattleEmbed(
+  battle: BattleSessionView,
+  hasSceneImage = false,
+): EmbedBuilder {
   const coinIcon = botEmojiRegistry.getCoinMention();
   const checkIcon = botEmojiRegistry.getCheckMention();
   const isFinished = battle.status === 'FINISHED';
@@ -767,8 +786,8 @@ export function buildBattleEmbed(battle: BattleSessionView): EmbedBuilder {
     battle.mode === 'GYM' && battle.gymSpec
       ? `#${battle.gymSpec.stage} · ${battle.gymSpec.leaderName} (${battle.gymSpec.badgeName})`
       : battle.mode === 'PVP'
-        ? 'Đấu Trường PvP'
-        : 'Đấu Trường PvE';
+        ? `Đấu Trường PvP (${battle.teamA.length}v${battle.teamB.length})`
+        : `Đấu Trường PvE (${battle.teamA.length}v${battle.teamB.length})`;
 
   const color = isFinished
     ? battle.winnerOwnerId === battle.fighterA.ownerId
@@ -782,20 +801,25 @@ export function buildBattleEmbed(battle: BattleSessionView): EmbedBuilder {
     .addFields(
       {
         name: `${battle.fighterA.ownerName}`,
-        value: formatFighterField(battle.fighterA),
+        value: formatFighterField(battle.fighterA, battle.teamA, battle.activeIndexA),
         inline: true,
       },
       {
         name: `${battle.fighterB.ownerName}`,
-        value: formatFighterField(battle.fighterB),
+        value: formatFighterField(battle.fighterB, battle.teamB, battle.activeIndexB),
         inline: true,
       },
-    )
-    .setThumbnail(
+    );
+
+  if (hasSceneImage) {
+    embed.setImage('attachment://battle-arena.png');
+  } else {
+    embed.setThumbnail(
       battle.fighterB.isShiny
         ? battle.fighterB.species.shinyAnimatedSpriteUrl
         : battle.fighterB.species.animatedSpriteUrl,
     );
+  }
 
   const logsBlock = battle.recentLogs.map(renderLogIcons).join('\n');
   let footerOrReward = '';
@@ -813,7 +837,7 @@ export function buildBattleEmbed(battle: BattleSessionView): EmbedBuilder {
       const badgePart = battle.reward.firstClearBadgeName
         ? ` · **${battle.reward.firstClearBadgeName}**!`
         : '';
-      footerOrReward += `\nThưởng: ${coinIcon} **+${formatNumber(battle.reward.coinsEarned)} PC** · **+${battle.reward.trainerXpEarned} XP Trainer** · **+${battle.reward.buddyXpEarned} XP Fighter**${ballPart}${badgePart}`;
+      footerOrReward += `\nThưởng: ${coinIcon} **+${formatNumber(battle.reward.coinsEarned)} PC** · **+${battle.reward.trainerXpEarned} XP Trainer** · **+${battle.reward.buddyXpEarned} XP/Team**${ballPart}${badgePart}`;
     }
   } else if (battle.status === 'ACTIVE') {
     const activeName =
@@ -849,8 +873,10 @@ export function buildBattleActionRows(
     ];
   }
 
-  const activeFighter =
-    battle.activeTurnOwnerId === battle.fighterA.ownerId ? battle.fighterA : battle.fighterB;
+  const isTurnA = battle.activeTurnOwnerId === battle.fighterA.ownerId;
+  const activeFighter = isTurnA ? battle.fighterA : battle.fighterB;
+  const activeTeam = isTurnA ? battle.teamA : battle.teamB;
+  const activeIdx = isTurnA ? battle.activeIndexA : battle.activeIndexB;
 
   const moveButtons = activeFighter.moves.slice(0, 4).map((move, idx) => {
     const cd = activeFighter.cooldowns[move.id] ?? 0;
@@ -889,7 +915,134 @@ export function buildBattleActionRows(
       .setStyle(ButtonStyle.Secondary),
   );
 
-  return [new ActionRowBuilder<ButtonBuilder>().addComponents(...moveButtons)];
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(...moveButtons),
+  ];
+
+  if (activeTeam.length > 1) {
+    const switchButtons = activeTeam.map((member, idx) => {
+      const pct = Math.max(0, Math.round((member.hp / Math.max(1, member.maxHp)) * 100));
+      const isCurrent = idx === activeIdx;
+      const isFainted = member.hp <= 0;
+      const label = isFainted
+        ? `${member.species.name} (Ngất)`
+        : isCurrent
+          ? `${member.species.name} (Sân · ${pct}%)`
+          : `Đổi: ${member.species.name} (${pct}%)`;
+      const btn = new ButtonBuilder()
+        .setCustomId(`bt:switch:${battle.battleId}:${idx}`)
+        .setLabel(label.slice(0, 80))
+        .setStyle(isCurrent ? ButtonStyle.Success : ButtonStyle.Secondary)
+        .setDisabled(isCurrent || isFainted);
+      const typeEmoji = botEmojiRegistry.getTypeButtonEmoji(member.species.types[0] ?? 'Normal');
+      if (typeEmoji) {
+        btn.setEmoji(typeEmoji);
+      }
+      return btn;
+    });
+    rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...switchButtons));
+  }
+
+  return rows;
+}
+
+export async function buildBattleMessagePayload(battle: BattleSessionView): Promise<{
+  readonly embeds: EmbedBuilder[];
+  readonly components: ActionRowBuilder<ButtonBuilder>[];
+  readonly files: AttachmentBuilder[];
+  readonly attachments: readonly never[];
+}> {
+  const sceneAttachment = await renderBattleSceneAttachment(battle);
+  const embed = buildBattleEmbed(battle, Boolean(sceneAttachment));
+  return {
+    embeds: [embed],
+    components: buildBattleActionRows(battle),
+    files: sceneAttachment ? [sceneAttachment] : [],
+    attachments: [],
+  };
+}
+
+// ======================= TEAM 3 POKÉMON (;team / /team) =======================
+
+function formatTeamMemberLine(member: TeamMemberView | null, slotIndex: number): string {
+  if (!member) {
+    return `\`[Ô #${slotIndex}]\` *(Trống — dùng \`set ${slotIndex} <tên|#mã>\` hoặc \`add <tên>\` để thêm)*`;
+  }
+  const shiny = member.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
+  const fav = member.isFavorite ? `${botEmojiRegistry.getFavMention()} ` : '';
+  const typeIcons = member.species.types
+    .map((t) => botEmojiRegistry.getTypeMention(t) || t)
+    .join('');
+  const buddyTag = member.isBuddy ? ' · `Buddy`' : '';
+  const leadTag = slotIndex === 1 ? ' · `Xuất trận đầu`' : '';
+  const movesText = member.equippedMoves
+    .map((m) => `${botEmojiRegistry.getTypeMention(m.type) || ''} ${m.name}`.trim())
+    .join(', ');
+
+  return [
+    `\`[Ô #${slotIndex}]\` ${fav}${typeIcons} ${shiny}**${member.species.name}** \`Lv.${member.level}\` — **${member.ivPercent}% IV** · **CP ${formatNumber(member.stats.combatPower)}** (\`#${member.shortId}\`)${buddyTag}${leadTag}`,
+    `└ HP **${member.stats.maxHp}** · ATK **${member.stats.atk}** · SpA **${member.stats.spAtk}** · SPD **${member.stats.spd}** · Chiêu (${member.equippedMoves.length}/4): *${movesText}*`,
+  ].join('\n');
+}
+
+export function buildTeamEmbed(
+  displayName: string,
+  team: TeamView,
+  prefix: string,
+  notice?: string,
+): EmbedBuilder {
+  const checkIcon = botEmojiRegistry.getCheckMention();
+  const lead = team.members[0];
+  const slotLines = [0, 1, 2].map((i) => formatTeamMemberLine(team.slots[i] ?? null, i + 1));
+
+  const headerParts = [
+    `Tổng sức chiến đấu: **CP ${formatNumber(team.totalCp)}** (**${team.members.length}/3** thành viên)`,
+    `Đội hình này được dùng cho **PvE (\`${prefix}bt\`)**, **Challengers (\`${prefix}gym\`)** và **PvP**. Các thành viên trong đội cũng được chia **50% EXP** khi bắt Pokémon!`,
+    notice ? `\n${checkIcon} ${notice}` : '',
+  ].filter(Boolean);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x0ea5e9)
+    .setTitle(`Đội Hình Chiến Đấu (3v3) · ${displayName}`)
+    .setDescription(headerParts.join('\n'))
+    .addFields({
+      name: 'Danh Sách 3 Ô Đội Hình',
+      value: slotLines.join('\n\n'),
+      inline: false,
+    })
+    .setFooter({
+      text: `Lệnh nhanh: ${prefix}team set <1-3> <tên> · ${prefix}team swap <1-3> <1-3> · ${prefix}team auto`,
+    });
+
+  if (lead) {
+    embed.setThumbnail(
+      lead.isShiny ? lead.species.shinyAnimatedSpriteUrl : lead.species.animatedSpriteUrl,
+    );
+  }
+  return embed;
+}
+
+export function buildTeamComponents(
+  ownerUserId: string,
+  team: TeamView,
+): ActionRowBuilder<ButtonBuilder>[] {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`team:auto:${ownerUserId}`)
+      .setLabel('Tự Xếp 3 Con Mạnh Nhất')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`team:swap12:${ownerUserId}`)
+      .setLabel('Đổi Ô 1 ↔ 2')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(team.members.length < 2),
+    new ButtonBuilder()
+      .setCustomId(`team:swap13:${ownerUserId}`)
+      .setLabel('Đổi Ô 1 ↔ 3')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(team.members.length < 3),
+  );
+  return [row];
 }
 
 export function buildMoveShopEmbed(

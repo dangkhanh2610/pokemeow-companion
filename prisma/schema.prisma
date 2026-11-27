@@ -23,6 +23,7 @@ model Trainer {
   lastWildAt          DateTime?
   lastRescueAt        DateTime?
   buddyCreatureId     String?
+  teamCreatureIds     String[]             @default([])
   fishingRod          String               @default("old_rod")
   lastFishAt          DateTime?
   gymBadges           String[]             @default([])

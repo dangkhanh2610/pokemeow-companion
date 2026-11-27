@@ -20,6 +20,12 @@ import type {
   ThrowBallOutcome,
 } from '../types';
 import { captchaService, type CaptchaView } from './captcha-service';
+import {
+  deleteFishPreview,
+  releaseEncounterLock,
+  setFishPreview,
+  tryAcquireEncounterLock,
+} from './activity-lock';
 import { awardBuddyCatchXpInTx } from './evolution-service';
 import { questService } from './quest-service';
 import {
@@ -43,8 +49,14 @@ export type CastRodOutcome =
     }
   | {
       readonly ok: false;
-      readonly reason: 'COOLDOWN' | 'ACTIVE_FISHING' | 'CAPTCHA_REQUIRED';
+      readonly reason:
+        | 'COOLDOWN'
+        | 'ACTIVE_FISHING'
+        | 'ACTIVE_WILD_ENCOUNTER'
+        | 'SPAWN_IN_FLIGHT'
+        | 'CAPTCHA_REQUIRED';
       readonly remainingMs?: number;
+      readonly species?: CreatureSpecies;
       readonly captcha?: CaptchaView;
     };
 
@@ -190,112 +202,138 @@ export class FishingService {
     userMeta: TrainerIdentityInput,
     channelId: string,
   ): Promise<CastRodOutcome> {
-    await trainerService.ensureTrainer(userMeta);
-
-    const pendingCaptcha = await captchaService.checkSpawnGate(userMeta.userId);
-    if (pendingCaptcha) {
-      return {
-        ok: false,
-        reason: 'CAPTCHA_REQUIRED',
-        captcha: pendingCaptcha,
-      };
+    if (!tryAcquireEncounterLock(userMeta.userId)) {
+      return { ok: false, reason: 'SPAWN_IN_FLIGHT' };
     }
 
-    const prisma = getPrismaClient();
-    return withDbRetry(() =>
-      prisma.$transaction(async (tx) => {
-        const now = new Date();
-        const trainer = await tx.trainer.findUniqueOrThrow({
-          where: { userId: userMeta.userId },
-          include: { inventory: true },
-        });
+    try {
+      await trainerService.ensureTrainer(userMeta);
 
-        if (trainer.lastFishAt) {
-          const elapsed = now.getTime() - trainer.lastFishAt.getTime();
-          if (elapsed < FISHING_COOLDOWN_MS) {
+      const pendingCaptcha = await captchaService.checkSpawnGate(userMeta.userId);
+      if (pendingCaptcha) {
+        return {
+          ok: false,
+          reason: 'CAPTCHA_REQUIRED',
+          captcha: pendingCaptcha,
+        };
+      }
+
+      const prisma = getPrismaClient();
+      return await withDbRetry(() =>
+        prisma.$transaction(async (tx) => {
+          const now = new Date();
+          const trainer = await tx.trainer.findUniqueOrThrow({
+            where: { userId: userMeta.userId },
+            include: { inventory: true },
+          });
+
+          if (trainer.lastFishAt) {
+            const elapsed = now.getTime() - trainer.lastFishAt.getTime();
+            if (elapsed < FISHING_COOLDOWN_MS) {
+              return {
+                ok: false,
+                reason: 'COOLDOWN',
+                remainingMs: FISHING_COOLDOWN_MS - elapsed,
+              };
+            }
+          }
+
+          const [activeFish, activeWild] = await Promise.all([
+            tx.fishingEncounter.findFirst({
+              where: {
+                userId: userMeta.userId,
+                status: { in: ['BITING', 'HOOKED', 'RESOLVING'] },
+                expiresAt: { gt: now },
+              },
+              orderBy: { createdAt: 'desc' },
+            }),
+            tx.activeEncounter.findFirst({
+              where: {
+                userId: userMeta.userId,
+                status: { in: ['OPEN', 'RESOLVING'] },
+                expiresAt: { gt: now },
+              },
+              orderBy: { createdAt: 'desc' },
+            }),
+          ]);
+
+          if (activeWild) {
             return {
               ok: false,
-              reason: 'COOLDOWN',
-              remainingMs: FISHING_COOLDOWN_MS - elapsed,
+              reason: 'ACTIVE_WILD_ENCOUNTER',
+              species: defaultCreatureCatalog.getById(activeWild.speciesId),
             };
           }
-        }
 
-        const activeFish = await tx.fishingEncounter.findFirst({
-          where: {
-            userId: userMeta.userId,
-            status: { in: ['BITING', 'HOOKED'] },
-            expiresAt: { gt: now },
-          },
-          orderBy: { createdAt: 'desc' },
-        });
-
-        if (activeFish) {
-          return { ok: false, reason: 'ACTIVE_FISHING' };
-        }
-
-        const rod = getRodSpec(trainer.fishingRod);
-        const invMap = new Map(trainer.inventory.map((i) => [i.itemId, i.quantity]));
-        let baitUsed: BaitId | null = null;
-        if ((invMap.get('bait_gold') ?? 0) > 0) {
-          baitUsed = 'bait_gold';
-        } else if ((invMap.get('bait_lure') ?? 0) > 0) {
-          baitUsed = 'bait_lure';
-        }
-
-        if (baitUsed) {
-          const spentBait = await tx.inventoryItem.updateMany({
-            where: { userId: userMeta.userId, itemId: baitUsed, quantity: { gte: 1 } },
-            data: { quantity: { decrement: 1 } },
-          });
-          if (spentBait.count === 0) {
-            baitUsed = null;
+          if (activeFish) {
+            return { ok: false, reason: 'ACTIVE_FISHING' };
           }
-        }
 
-        const roll = rollWaterEncounter(rod, baitUsed);
-        const expiresAt = new Date(now.getTime() + FISHING_BITE_TTL_MS);
+          const rod = getRodSpec(trainer.fishingRod);
+          const invMap = new Map(trainer.inventory.map((i) => [i.itemId, i.quantity]));
+          let baitUsed: BaitId | null = null;
+          if ((invMap.get('bait_gold') ?? 0) > 0) {
+            baitUsed = 'bait_gold';
+          } else if ((invMap.get('bait_lure') ?? 0) > 0) {
+            baitUsed = 'bait_lure';
+          }
 
-        const ivsJson: Prisma.InputJsonObject = {
-          hp: roll.ivs.hp,
-          atk: roll.ivs.atk,
-          def: roll.ivs.def,
-          spAtk: roll.ivs.spAtk,
-          spDef: roll.ivs.spDef,
-          spd: roll.ivs.spd,
-        };
+          if (baitUsed) {
+            const spentBait = await tx.inventoryItem.updateMany({
+              where: { userId: userMeta.userId, itemId: baitUsed, quantity: { gte: 1 } },
+              data: { quantity: { decrement: 1 } },
+            });
+            if (spentBait.count === 0) {
+              baitUsed = null;
+            }
+          }
 
-        const encounter = await tx.fishingEncounter.create({
-          data: {
-            userId: userMeta.userId,
-            channelId,
-            rodId: rod.id,
-            baitId: baitUsed,
-            speciesId: roll.species.id,
-            isShiny: roll.isShiny,
-            ivsJson,
-            status: 'BITING',
+          const roll = rollWaterEncounter(rod, baitUsed);
+          const expiresAt = new Date(now.getTime() + FISHING_BITE_TTL_MS);
+
+          const ivsJson: Prisma.InputJsonObject = {
+            hp: roll.ivs.hp,
+            atk: roll.ivs.atk,
+            def: roll.ivs.def,
+            spAtk: roll.ivs.spAtk,
+            spDef: roll.ivs.spDef,
+            spd: roll.ivs.spd,
+          };
+
+          const encounter = await tx.fishingEncounter.create({
+            data: {
+              userId: userMeta.userId,
+              channelId,
+              rodId: rod.id,
+              baitId: baitUsed,
+              speciesId: roll.species.id,
+              isShiny: roll.isShiny,
+              ivsJson,
+              status: 'BITING',
+              expiresAt,
+            },
+          });
+
+          await tx.trainer.update({
+            where: { userId: userMeta.userId },
+            data: {
+              lastFishAt: now,
+              actionsSinceVerify: { increment: 1 },
+            },
+          });
+
+          return {
+            ok: true,
+            encounterId: encounter.id,
+            rod,
+            baitUsed,
             expiresAt,
-          },
-        });
-
-        await tx.trainer.update({
-          where: { userId: userMeta.userId },
-          data: {
-            lastFishAt: now,
-            actionsSinceVerify: { increment: 1 },
-          },
-        });
-
-        return {
-          ok: true,
-          encounterId: encounter.id,
-          rod,
-          baitUsed,
-          expiresAt,
-        };
-      }),
-    );
+          };
+        }),
+      );
+    } finally {
+      releaseEncounterLock(userMeta.userId);
+    }
   }
 
   public async pullHook(encounterId: string, userId: string): Promise<PullHookOutcome> {
@@ -351,6 +389,13 @@ export class FishingService {
         const baitUsed: BaitId | null =
           enc.baitId === 'bait_lure' || enc.baitId === 'bait_gold' ? enc.baitId : null;
 
+        setFishPreview(enc.id, {
+          userId,
+          species,
+          isShiny: enc.isShiny,
+          expiresAtMs: expiresAt.getTime(),
+        });
+
         return {
           ok: true,
           encounterId: enc.id,
@@ -378,7 +423,13 @@ export class FishingService {
 
     const outcome: ThrowBallOutcome = await withDbRetry(() =>
       prisma.$transaction(async (tx) => {
-        const enc = await tx.fishingEncounter.findUnique({ where: { id: encounterId } });
+        const [enc, trainer] = await Promise.all([
+          tx.fishingEncounter.findUnique({ where: { id: encounterId } }),
+          tx.trainer.findUnique({
+            where: { userId },
+            include: { inventory: true },
+          }),
+        ]);
         if (!enc) {
           return {
             ok: false,
@@ -392,6 +443,9 @@ export class FishingService {
             reason: 'NOT_OWNER',
             message: 'Bạn không thể ném bóng vào Pokémon của cần thủ khác!',
           };
+        }
+        if (!trainer) {
+          throw new Error(`Không tìm thấy Trainer userId=${userId}`);
         }
 
         const now = new Date();
@@ -430,11 +484,18 @@ export class FishingService {
           };
         }
 
-        const trainer = await tx.trainer.findUniqueOrThrow({ where: { userId } });
         const species = defaultCreatureCatalog.getById(enc.speciesId);
         if (!species) {
           throw new Error(`Không tìm thấy loài ID=${enc.speciesId} trong catalog.`);
         }
+
+        const remainingBalls = emptyBallInventory();
+        for (const item of trainer.inventory) {
+          if (isBallId(item.itemId)) {
+            remainingBalls[item.itemId] = item.quantity;
+          }
+        }
+        remainingBalls[ballId] = Math.max(0, remainingBalls[ballId] - 1);
 
         const buddy = trainer.buddyCreatureId
           ? await tx.caughtCreature.findFirst({
@@ -507,6 +568,7 @@ export class FishingService {
                 species.rarity,
                 enc.isShiny,
                 'fishing',
+                trainer.teamCreatureIds,
               )
             : undefined;
 
@@ -545,14 +607,6 @@ export class FishingService {
             data: { status: 'CAUGHT' },
           });
 
-          const items = await tx.inventoryItem.findMany({ where: { userId } });
-          const remainingBalls = emptyBallInventory();
-          for (const item of items) {
-            if (isBallId(item.itemId)) {
-              remainingBalls[item.itemId] = item.quantity;
-            }
-          }
-
           return {
             ok: true,
             caught: true,
@@ -583,14 +637,6 @@ export class FishingService {
           data: { status: 'FLED' },
         });
 
-        const items = await tx.inventoryItem.findMany({ where: { userId } });
-        const remainingBalls = emptyBallInventory();
-        for (const item of items) {
-          if (isBallId(item.itemId)) {
-            remainingBalls[item.itemId] = item.quantity;
-          }
-        }
-
         return {
           ok: true,
           caught: false,
@@ -602,6 +648,10 @@ export class FishingService {
         };
       }),
     );
+
+    if (outcome.ok) {
+      deleteFishPreview(encounterId);
+    }
 
     if (outcome.ok && outcome.caught) {
       await questService
@@ -618,6 +668,7 @@ export class FishingService {
   }
 
   public async expireFishingIfActive(encounterId: string): Promise<boolean> {
+    deleteFishPreview(encounterId);
     const prisma = getPrismaClient();
     const res = await withDbRetry(() =>
       prisma.fishingEncounter.updateMany({
