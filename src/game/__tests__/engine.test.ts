@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { BALL_CATALOG, getBallSpec, resolveBallId } from '../catalog/ball-catalog';
 import { defaultCreatureCatalog, PokemonCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-catalog';
+import { getWaterPools, resolveBaitId, resolveRodId, ROD_CATALOG } from '../catalog/fishing-catalog';
+import { buildCombatant, executeMove, getTypeEffectiveness } from '../engine/battle-engine';
 import { CatchStrategyRegistry } from '../engine/catch-strategy';
 import { applyXp, computeIvSummary, SHINY_CHANCE, SpawnEngine, xpForNextLevel } from '../engine/spawn-engine';
+import { rollNextCaptchaThreshold } from '../services/captcha-service';
 import { ENCOUNTER_NETWORK_GRACE_MS, ENCOUNTER_TTL_MS } from '../services/encounter-service';
+import { addCreatureXp, getEvolutionBranches } from '../services/evolution-service';
 import { isChannelAllowed, validatePrefix } from '../services/guild-config-service';
 
 describe('PokéVerse RPG Core Engine', () => {
@@ -227,5 +231,84 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.equal(validatePrefix('a b'), null);
     assert.equal(validatePrefix('toolong'), null);
     assert.equal(validatePrefix('<@123>'), null);
+  });
+
+  it('Hệ thống Tiến hóa, Câu cá Nước, Buddy Bonus, Chiến đấu theo lượt & Anti-Macro Captcha hoạt động chính xác', () => {
+    // 1. Evolution chains & Creature XP
+    const bulbaEvos = getEvolutionBranches(1);
+    assert.equal(bulbaEvos.length, 1);
+    assert.equal(bulbaEvos[0]?.toSpeciesId, 2);
+    assert.equal(bulbaEvos[0]?.requiredLevel, 16);
+
+    const eeveeEvos = getEvolutionBranches(133);
+    assert.equal(eeveeEvos.length, 8);
+
+    const charMega = defaultCreatureCatalog.getAll().find((s) => s.name === 'Charizard-Mega-X');
+    assert.ok(charMega);
+    assert.equal(getEvolutionBranches(charMega.id).length, 0);
+
+    const xpRes = addCreatureXp(0, 1, 60);
+    assert.equal(xpRes.level, 2);
+    assert.equal(xpRes.xp, 10);
+    assert.equal(xpRes.leveledUp, true);
+
+    // 2. Fishing catalog & Water pools
+    assert.equal(ROD_CATALOG.length, 4);
+    assert.equal(resolveRodId('good'), 'good_rod');
+    assert.equal(resolveBaitId('lure'), 'bait_lure');
+    assert.ok(getWaterPools().common.length >= 20);
+    assert.ok(getWaterPools().legendary.length >= 2);
+
+    // 3. Buddy +4% catch bonus
+    const registry = new CatchStrategyRegistry();
+    const noBuddy = registry.calculateChance({
+      baseCatchRate: 0.3,
+      rarity: 'rare',
+      isShiny: false,
+      trainerLevel: 1,
+      ballId: 'pokeball',
+      hasBuddyBonus: false,
+    });
+    const withBuddy = registry.calculateChance({
+      baseCatchRate: 0.3,
+      rarity: 'rare',
+      isShiny: false,
+      trainerLevel: 1,
+      ballId: 'pokeball',
+      hasBuddyBonus: true,
+    });
+    assert.ok(withBuddy > noBuddy);
+
+    const masterWithBuddy = registry.calculateChance({
+      baseCatchRate: 0.08,
+      rarity: 'legendary',
+      isShiny: true,
+      trainerLevel: 1,
+      ballId: 'masterball',
+      hasBuddyBonus: true,
+    });
+    assert.equal(masterWithBuddy, 1.0);
+
+    // 4. Turn-based battle engine & type chart
+    assert.equal(getTypeEffectiveness('Water', ['Fire']), 2);
+    assert.equal(getTypeEffectiveness('Fire', ['Water']), 0.5);
+    assert.equal(getTypeEffectiveness('Electric', ['Ground']), 0.2);
+
+    const blastoise = defaultCreatureCatalog.getById(9)!;
+    const charizard = defaultCreatureCatalog.getById(6)!;
+    const ivs = { hp: 20, atk: 20, def: 20, spAtk: 20, spDef: 20, spd: 20 };
+    const combatA = buildCombatant(blastoise, ivs, 36, false, 'u1', 'PlayerA');
+    const combatB = buildCombatant(charizard, ivs, 36, false, 'u2', 'PlayerB');
+
+    const hitRes = executeMove(combatA, combatB, 'primary', () => 0.5);
+    assert.equal(hitRes.hit, true);
+    assert.ok(hitRes.damageDealt > 0);
+    assert.ok(combatB.hp < combatB.maxHp);
+
+    // 5. Captcha threshold range [80..100]
+    for (let i = 0; i < 30; i += 1) {
+      const th = rollNextCaptchaThreshold();
+      assert.ok(th >= 80 && th <= 100);
+    }
   });
 });

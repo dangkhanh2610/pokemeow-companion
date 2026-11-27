@@ -81,6 +81,7 @@ export class MegaService {
             where: {
               userId,
               released: false,
+              inMarket: false,
               speciesId: { in: megaDexNumbers },
             },
             orderBy: [{ isShiny: 'desc' }, { ivTotal: 'desc' }],
@@ -150,6 +151,7 @@ export class MegaService {
         where: {
           userId: userMeta.userId,
           released: false,
+          inMarket: false,
           speciesId: megaSpecies.dexNumber,
         },
         orderBy: [{ isShiny: 'desc' }, { ivTotal: 'desc' }, { caughtAt: 'asc' }],
@@ -184,6 +186,7 @@ export class MegaService {
           where: {
             userId: userMeta.userId,
             released: false,
+            inMarket: false,
             rarity: 'legendary',
             isShiny: false,
             isFavorite: false,
@@ -252,6 +255,7 @@ export class MegaService {
           where: {
             userId: userMeta.userId,
             released: false,
+            inMarket: false,
             speciesId: megaSpecies.dexNumber,
           },
           orderBy: [{ isShiny: 'desc' }, { ivTotal: 'desc' }, { caughtAt: 'asc' }],
@@ -320,6 +324,7 @@ export class MegaService {
           where: {
             userId: userMeta.userId,
             released: false,
+            inMarket: false,
             rarity: 'legendary',
             isShiny: false,
             isFavorite: false,

@@ -162,10 +162,16 @@ export class EconomyService {
           };
         }
 
+        const trainer = await tx.trainer.findUniqueOrThrow({
+          where: { userId: userMeta.userId },
+          select: { buddyCreatureId: true, coins: true },
+        });
+
         const candidates = await tx.caughtCreature.findMany({
           where: {
             userId: userMeta.userId,
             released: false,
+            inMarket: false,
             isShiny: false,
             isFavorite: false,
           },
@@ -177,10 +183,19 @@ export class EconomyService {
         });
 
         const keptSpecies = new Set<number>();
+        if (trainer.buddyCreatureId) {
+          const buddyRow = candidates.find((c) => c.id === trainer.buddyCreatureId);
+          if (buddyRow) {
+            keptSpecies.add(buddyRow.speciesId);
+          }
+        }
         const duplicateIds: string[] = [];
         let coinsEarned = 0;
 
         for (const creature of candidates) {
+          if (creature.id === trainer.buddyCreatureId) {
+            continue;
+          }
           const species = defaultCreatureCatalog.getById(creature.speciesId);
           if (!species || species.rarity === 'legendary' || species.rarity === 'mega') {
             continue;
@@ -196,9 +211,6 @@ export class EconomyService {
         }
 
         if (duplicateIds.length === 0) {
-          const trainer = await tx.trainer.findUniqueOrThrow({
-            where: { userId: userMeta.userId },
-          });
           return {
             releasedCount: 0,
             coinsEarned: 0,

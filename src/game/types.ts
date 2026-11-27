@@ -4,6 +4,12 @@ export type CreatureFormType = 'base' | 'mega' | 'gmax' | 'regional' | 'special'
 
 export type BallId = 'pokeball' | 'greatball' | 'ultraball' | 'premierball' | 'masterball';
 
+export type RodId = 'old_rod' | 'good_rod' | 'super_rod' | 'master_rod';
+
+export type BaitId = 'bait_lure' | 'bait_gold';
+
+export type QuestPeriod = 'DAILY' | 'WEEKLY';
+
 export interface CreatureIVs {
   readonly hp: number;
   readonly atk: number;

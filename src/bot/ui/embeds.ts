@@ -113,6 +113,7 @@ export function buildCatchButtonsRow(
   encounterId: string,
   ballInventory: Readonly<Record<BallId, number>>,
   disabledAll = false,
+  customIdPrefix = 'catch',
 ): ActionRowBuilder<ButtonBuilder> {
   const buttons = BALL_CATALOG.map((ball) => {
     const qty = ballInventory[ball.id];
@@ -120,7 +121,7 @@ export function buildCatchButtonsRow(
     const style = isMasterAvailable ? ButtonStyle.Primary : ButtonStyle.Secondary;
 
     return new ButtonBuilder()
-      .setCustomId(`catch:${encounterId}:${ball.id}`)
+      .setCustomId(`${customIdPrefix}:${encounterId}:${ball.id}`)
       .setLabel(`${BALL_SHORT_LABELS[ball.id]} · ${qty}`)
       .setEmoji(botEmojiRegistry.getBallButtonEmoji(ball.id))
       .setStyle(style)
@@ -483,6 +484,10 @@ export function buildProfileEmbed(summary: TrainerBagSummary): EmbedBuilder {
       ? ((summary.totalCatches / summary.totalEncounters) * 100).toFixed(1)
       : '0.0';
 
+  const buddyText = summary.buddy
+    ? `${summary.buddy.isShiny ? `${shinyIcon} ` : ''}**${summary.buddy.speciesName}** (Lv.${summary.buddy.level} · ${summary.buddy.ivPercent}% IV)`
+    : '*Chưa chọn Buddy (`/buddy set`)*';
+
   const topLines =
     summary.topCreatures.length > 0
       ? summary.topCreatures.map((c, idx) => {
@@ -512,8 +517,8 @@ export function buildProfileEmbed(summary: TrainerBagSummary): EmbedBuilder {
         inline: true,
       },
       {
-        name: 'Thành Tích Bắt',
-        value: `Đã bắt: **${formatNumber(summary.totalCatches)}** (${catchRate}%)\n${shinyIcon} Shiny: **${summary.shinyCatches}**  ·  Loài: **${summary.uniqueSpeciesCount}/${defaultCreatureCatalog.getAll().length}**`,
+        name: 'Thành Tích & Đấu Trường',
+        value: `Đã bắt: **${formatNumber(summary.totalCatches)}** (${catchRate}%) · ${shinyIcon} **${summary.shinyCatches}** · Loài: **${summary.uniqueSpeciesCount}/${defaultCreatureCatalog.getAll().length}**\nHuy hiệu Gym: **${summary.gymBadges.length}/8**  ·  Thắng trận: **${formatNumber(summary.battleWins)}**\nBuddy: ${buddyText}`,
         inline: false,
       },
       {
@@ -669,25 +674,27 @@ export function buildHelpEmbed(prefix: string, botName: string): EmbedBuilder {
     )
     .addFields(
       {
-        name: 'Bắt & Sưu Tập',
+        name: 'Bắt, Câu Cá & Đồng Hành',
         value: [
           `• \`${prefix}p\` / \`/p\` — Tìm & bắt Pokémon hoang dã`,
-          `• \`${prefix}d [shiny|mega|fav|tên]\` / \`/dex\` — Xem & lọc Pokédex`,
-          `• \`${prefix}f [tên|#mã]\` / \`/fav\` — Khóa/mở khóa Pokémon yêu thích`,
+          `• \`${prefix}f\` / \`/f\` — Câu cá hệ Nước & Shiny (\`${prefix}f shop\` mua cần/mồi)`,
+          `• \`${prefix}bd\` / \`/buddy\` — Chọn & luyện Buddy (+4% bắt, +15% XP)`,
+          `• \`${prefix}ev\` / \`/evolve\` — Tiến hóa Pokémon khi đủ cấp độ`,
+          `• \`${prefix}d [lọc]\` / \`${prefix}fav [#mã]\` — Xem Pokédex & khóa yêu thích`,
           `• \`${prefix}m [tên]\` / \`/mega\` — Nghi thức hiến tế 5/6 Legend lên Mega`,
-          `• \`${prefix}pf\` / \`/profile\` — Xem hồ sơ huấn luyện viên`,
         ].join('\n'),
         inline: false,
       },
       {
-        name: 'Cửa Hàng & Kinh Tế',
+        name: 'Nhiệm Vụ, Chợ & Đấu Trường',
         value: [
-          `• \`${prefix}s\` / \`/shop\` — Xem cửa hàng Poké Ball (\`[1]\`–\`[5]\`)`,
-          `• \`${prefix}s b 1 10\` / \`${prefix}b pb 10\` / \`/buy\` — Mua nhanh theo số hoặc mã`,
-          `• \`${prefix}i\` / \`${prefix}bal\` / \`/bag\` — Xem túi đồ & số dư PC`,
-          `• \`${prefix}r\` / \`/release\` — Thả Pokémon trùng kiếm PC`,
-          `• \`${prefix}dl\` / \`/daily\` — Điểm danh mỗi 24 giờ`,
-          `• \`${prefix}lb\` / \`/lb\` — Xem bảng xếp hạng cộng đồng`,
+          `• \`${prefix}q\` / \`/quest\` — Nhiệm vụ ngày/tuần thưởng Premier & Master Ball`,
+          `• \`${prefix}s\` / \`${prefix}s b 1 10\` — Cửa hàng & mua nhanh Poké Ball`,
+          `• \`${prefix}i\` / \`${prefix}bal\` / \`${prefix}pf\` — Túi đồ, số dư PC & hồ sơ`,
+          `• \`${prefix}mk\` / \`/market\` — Chợ mua bán Pokémon (\`${prefix}mk sell\`, \`${prefix}mk buy\`)`,
+          `• \`${prefix}tr\` / \`/trade\` — Trao đổi 2 bước an toàn với người chơi khác`,
+          `• \`${prefix}bt [gym|@user]\` / \`${prefix}gym\` — Đấu theo lượt PvE / 8 Gym / PvP`,
+          `• \`${prefix}r\` / \`${prefix}dl\` / \`${prefix}lb\` — Thả trùng, điểm danh & BXH`,
         ].join('\n'),
         inline: false,
       },

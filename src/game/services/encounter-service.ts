@@ -5,6 +5,9 @@ import { defaultCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-cata
 import { defaultCatchStrategyRegistry } from '../engine/catch-strategy';
 import { applyXp, computeIvSummary, defaultSpawnEngine } from '../engine/spawn-engine';
 import type { BallId, CreatureIVs, CreatureSpecies, EncounterRoll, ThrowBallOutcome } from '../types';
+import { captchaService, type CaptchaView } from './captcha-service';
+import { addCreatureXp } from './evolution-service';
+import { questService } from './quest-service';
 import {
   emptyBallInventory,
   isBallId,
@@ -35,9 +38,14 @@ export type SpawnEncounterOutcome =
     }
   | {
       readonly ok: false;
-      readonly reason: 'COOLDOWN' | 'ACTIVE_ENCOUNTER_EXISTS' | 'SPAWN_IN_FLIGHT';
+      readonly reason:
+        | 'COOLDOWN'
+        | 'ACTIVE_ENCOUNTER_EXISTS'
+        | 'SPAWN_IN_FLIGHT'
+        | 'CAPTCHA_REQUIRED';
       readonly remainingMs?: number;
       readonly species?: CreatureSpecies;
+      readonly captcha?: CaptchaView;
     };
 
 class InsufficientBallsError extends Error {
@@ -92,6 +100,15 @@ export class EncounterService {
     this.inFlightSpawns.add(userMeta.userId);
     try {
       await trainerService.ensureTrainer(userMeta);
+
+      const pendingCaptcha = await captchaService.checkSpawnGate(userMeta.userId);
+      if (pendingCaptcha) {
+        return {
+          ok: false,
+          reason: 'CAPTCHA_REQUIRED',
+          captcha: pendingCaptcha,
+        };
+      }
 
       const runSpawnTx = async (): Promise<SpawnEncounterOutcome> => {
         const prisma = getPrismaClient();
@@ -218,6 +235,7 @@ export class EncounterService {
               where: { userId: userMeta.userId },
               data: {
                 lastWildAt: now,
+                actionsSinceVerify: { increment: 1 },
                 ...(rescueGranted ? { lastRescueAt: now } : {}),
               },
             });
@@ -258,7 +276,7 @@ export class EncounterService {
     const prisma = getPrismaClient();
 
     try {
-      return await withDbRetry(() =>
+      const outcome: ThrowBallOutcome = await withDbRetry(() =>
         prisma.$transaction(async (tx) => {
           const encounter = await tx.activeEncounter.findUnique({
             where: { id: encounterId },
@@ -319,12 +337,25 @@ export class EncounterService {
             throw new Error(`Không tìm thấy loài ID=${encounter.speciesId} trong catalog.`);
           }
 
+          const buddy = trainer.buddyCreatureId
+            ? await tx.caughtCreature.findFirst({
+                where: {
+                  id: trainer.buddyCreatureId,
+                  userId,
+                  released: false,
+                  inMarket: false,
+                },
+                select: { id: true, xp: true, level: true },
+              })
+            : null;
+
           const catchChance = defaultCatchStrategyRegistry.calculateChance({
             baseCatchRate: species.baseCatchRate,
             rarity: species.rarity,
             isShiny: encounter.isShiny,
             trainerLevel: trainer.level,
             ballId,
+            hasBuddyBonus: Boolean(buddy),
           });
 
           const caught = Math.random() < catchChance;
@@ -333,8 +364,9 @@ export class EncounterService {
 
           if (caught) {
             const coinsEarned = encounter.isShiny ? species.baseReward * 3 : species.baseReward;
-            const xpEarned =
+            const rawXp =
               RARITY_CONFIGS[species.rarity].xpReward * (encounter.isShiny ? 2 : 1);
+            const xpEarned = Math.round(rawXp * (buddy ? 1.15 : 1));
             const xpNext = applyXp(trainer.xp, trainer.level, xpEarned);
 
             const creatureIvs: Prisma.InputJsonObject = {
@@ -360,6 +392,14 @@ export class EncounterService {
                 ballUsed: ballId,
               },
             });
+
+            if (buddy) {
+              const nextBuddyXp = addCreatureXp(buddy.xp, buddy.level, 18);
+              await tx.caughtCreature.update({
+                where: { id: buddy.id },
+                data: { xp: nextBuddyXp.xp, level: nextBuddyXp.level },
+              });
+            }
 
             const updatedTrainer = await tx.trainer.update({
               where: { userId },
@@ -444,6 +484,19 @@ export class EncounterService {
           };
         }),
       );
+
+      if (outcome.ok && outcome.caught) {
+        await questService
+          .recordProgress(userId, {
+            kind: 'catch',
+            types: outcome.species.types,
+            rarity: outcome.species.rarity,
+            isShiny: outcome.isShiny,
+          })
+          .catch(() => undefined);
+      }
+
+      return outcome;
     } catch (error) {
       if (error instanceof InsufficientBallsError) {
         return {

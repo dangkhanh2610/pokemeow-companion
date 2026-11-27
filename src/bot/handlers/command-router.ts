@@ -7,17 +7,28 @@ import {
   type User,
 } from 'discord.js';
 import { resolveBallId } from '@/game/catalog/ball-catalog';
+import type { BattleMoveAction } from '@/game/engine/battle-engine';
+import { battleService } from '@/game/services/battle-service';
+import { captchaService } from '@/game/services/captcha-service';
 import { economyService } from '@/game/services/economy-service';
 import { ENCOUNTER_TTL_MS, encounterService } from '@/game/services/encounter-service';
+import { evolutionService } from '@/game/services/evolution-service';
+import {
+  FISHING_BITE_TTL_MS,
+  FISHING_CATCH_TTL_MS,
+  fishingService,
+} from '@/game/services/fishing-service';
 import {
   guildConfigService,
   isChannelAllowed,
   validatePrefix,
 } from '@/game/services/guild-config-service';
 import { leaderboardService } from '@/game/services/leaderboard-service';
+import { marketService } from '@/game/services/market-service';
 import { megaService } from '@/game/services/mega-service';
+import { questService } from '@/game/services/quest-service';
 import { trainerService, type TrainerIdentityInput } from '@/game/services/trainer-service';
-import type { BallId, CreatureSpecies, LeaderboardMetric } from '@/game/types';
+import type { BallId, CreatureSpecies, LeaderboardMetric, ThrowBallOutcome } from '@/game/types';
 import { botEmojiRegistry } from '../emoji-registry';
 import {
   buildBagEmbed,
@@ -43,6 +54,35 @@ import {
   buildThrowingEmbed,
   buildWildEncounterEmbed,
 } from '../ui/embeds';
+import {
+  buildBattleActionRows,
+  buildBattleEmbed,
+  buildBuddyEmbed,
+  buildBuddyTrainEmbed,
+  buildBuyFishingItemEmbed,
+  buildCaptchaButtonsRow,
+  buildCaptchaEmbed,
+  buildCaptchaSuccessEmbed,
+  buildErrorNotice,
+  buildEvolutionCandidatesEmbed,
+  buildEvolutionSuccessEmbed,
+  buildFishingBiteEmbed,
+  buildFishingCastingEmbed,
+  buildFishingExpiredEmbed,
+  buildFishingPullRow,
+  buildFishingShopEmbed,
+  buildGymListEmbed,
+  buildMarketBrowseEmbed,
+  buildMarketBuyConfirmEmbed,
+  buildMarketBuyConfirmRow,
+  buildMarketListSuccessEmbed,
+  buildMarketPaginationRow,
+  buildQuestClaimRow,
+  buildQuestClaimSuccessEmbed,
+  buildQuestsEmbed,
+  buildTradeButtonsRow,
+  buildTradeEmbed,
+} from '../ui/feature-embeds';
 
 function extractTrainerMeta(user: User): TrainerIdentityInput {
   return {
@@ -102,6 +142,14 @@ function parseChannelMentionId(raw: string | undefined, fallbackId: string): str
   return match?.[1] ?? null;
 }
 
+function parseUserMentionId(raw: string | undefined): string | null {
+  if (!raw) {
+    return null;
+  }
+  const match = /^<@!?(\d+)>$/.exec(raw.trim()) ?? /^(\d{15,22})$/.exec(raw.trim());
+  return match?.[1] ?? null;
+}
+
 const ADMIN_SLASH_COMMANDS = new Set(['bot', 'prefix', 'channel']);
 const ADMIN_PREFIX_COMMANDS = new Set(['bot', 'prefix', 'channel']);
 
@@ -110,6 +158,7 @@ export class BotCommandRouter {
   private readonly botName: string;
   private readonly ownerIds: ReadonlySet<string>;
   private readonly encounterTimers = new Map<string, NodeJS.Timeout>();
+  private readonly fishingTimers = new Map<string, NodeJS.Timeout>();
 
   public constructor(defaultPrefix: string, botName: string, ownerIds: readonly string[] = []) {
     this.defaultPrefix = defaultPrefix;
@@ -122,6 +171,46 @@ export class BotCommandRouter {
       clearTimeout(timer);
     }
     this.encounterTimers.clear();
+    for (const timer of this.fishingTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.fishingTimers.clear();
+  }
+
+  private clearFishingTimer(encounterId: string): void {
+    const existing = this.fishingTimers.get(encounterId);
+    if (existing) {
+      clearTimeout(existing);
+      this.fishingTimers.delete(encounterId);
+    }
+  }
+
+  private scheduleFishingExpiry(
+    encounterId: string,
+    sentMessage: Message,
+    trainerDisplayName: string,
+    delayMs: number,
+  ): void {
+    this.clearFishingTimer(encounterId);
+    const timer = setTimeout(() => {
+      this.fishingTimers.delete(encounterId);
+      void (async () => {
+        try {
+          const expired = await fishingService.expireFishingIfActive(encounterId);
+          if (!expired) {
+            return;
+          }
+          await sentMessage.edit({
+            embeds: [buildFishingExpiredEmbed(trainerDisplayName)],
+            components: [],
+          });
+        } catch {
+          // Bỏ qua nếu tin nhắn đã bị xóa
+        }
+      })();
+    }, delayMs);
+    timer.unref();
+    this.fishingTimers.set(encounterId, timer);
   }
 
   private clearEncounterTimer(encounterId: string): void {
@@ -392,6 +481,13 @@ export class BotCommandRouter {
         await interaction.deferReply();
         const result = await encounterService.spawnWildEncounter(meta, interaction.channelId);
         if (!result.ok) {
+          if (result.reason === 'CAPTCHA_REQUIRED' && result.captcha) {
+            await interaction.editReply({
+              embeds: [buildCaptchaEmbed(meta.displayName, result.captcha)],
+              components: [buildCaptchaButtonsRow(result.captcha)],
+            });
+            return;
+          }
           if (result.reason === 'SPAWN_IN_FLIGHT') {
             await interaction.editReply(`${timerIcon} Đang xử lý lượt tìm trước đó của bạn...`);
             return;
@@ -579,6 +675,370 @@ export class BotCommandRouter {
         await interaction.reply({ embeds: [buildHelpEmbed(activePrefix, this.botName)] });
         return;
       }
+
+      case 'quest': {
+        await interaction.deferReply();
+        const action = interaction.options.getString('action') ?? 'view';
+        if (action === 'claim') {
+          const claimed = await questService.claimRewards(meta, `slash-quest:${interaction.id}`);
+          await interaction.editReply({
+            embeds: [buildQuestClaimSuccessEmbed(meta.displayName, claimed)],
+          });
+          return;
+        }
+        const summary = await questService.getQuestSummary(meta);
+        await interaction.editReply({
+          embeds: [buildQuestsEmbed(meta.displayName, summary, activePrefix)],
+          components: [buildQuestClaimRow(meta.userId, summary.claimableCount)],
+        });
+        return;
+      }
+
+      case 'buddy': {
+        await interaction.deferReply();
+        const sub = interaction.options.getSubcommand();
+        if (sub === 'set') {
+          const pokemon = interaction.options.getString('pokemon') ?? undefined;
+          const res = await evolutionService.setBuddy(meta, pokemon);
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({
+            embeds: [buildBuddyEmbed(meta.displayName, res.buddy, activePrefix)],
+          });
+          return;
+        }
+        if (sub === 'train') {
+          const levels = interaction.options.getInteger('levels') ?? 1;
+          const res = await evolutionService.trainBuddy(meta, levels, `slash-train:${interaction.id}`);
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({ embeds: [buildBuddyTrainEmbed(meta.displayName, res)] });
+          return;
+        }
+        await trainerService.ensureTrainer(meta);
+        const buddy = await evolutionService.getBuddyView(meta.userId);
+        await interaction.editReply({
+          embeds: [buildBuddyEmbed(meta.displayName, buddy, activePrefix)],
+        });
+        return;
+      }
+
+      case 'evolve': {
+        await interaction.deferReply();
+        const pokemon = interaction.options.getString('pokemon')?.trim() ?? '';
+        if (!pokemon) {
+          await trainerService.ensureTrainer(meta);
+          const candidates = await evolutionService.getEvolutionCandidates(meta.userId);
+          await interaction.editReply({
+            embeds: [buildEvolutionCandidatesEmbed(meta.displayName, candidates, activePrefix)],
+          });
+          return;
+        }
+        const into = interaction.options.getString('into') ?? undefined;
+        const res = await evolutionService.evolveCreature(
+          meta,
+          pokemon,
+          into,
+          `slash-evo:${interaction.id}`,
+        );
+        if (!res.ok) {
+          await interaction.editReply(buildErrorNotice(res.message));
+          return;
+        }
+        await interaction.editReply({ embeds: [buildEvolutionSuccessEmbed(meta.displayName, res)] });
+        return;
+      }
+
+      case 'f': {
+        await interaction.deferReply();
+        const sub = interaction.options.getSubcommand();
+        if (sub === 'shop') {
+          const gear = await fishingService.getFishingGear(meta);
+          await interaction.editReply({ embeds: [buildFishingShopEmbed(gear, activePrefix)] });
+          return;
+        }
+        if (sub === 'buy') {
+          const item = interaction.options.getString('item', true);
+          const qty = interaction.options.getInteger('quantity') ?? 1;
+          const res = await fishingService.buyFishingItem(
+            meta,
+            item,
+            qty,
+            `slash-fbuy:${interaction.id}`,
+          );
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({ embeds: [buildBuyFishingItemEmbed(meta.displayName, res)] });
+          return;
+        }
+        const cast = await fishingService.castRod(meta, interaction.channelId);
+        if (!cast.ok) {
+          if (cast.reason === 'CAPTCHA_REQUIRED' && cast.captcha) {
+            await interaction.editReply({
+              embeds: [buildCaptchaEmbed(meta.displayName, cast.captcha)],
+              components: [buildCaptchaButtonsRow(cast.captcha)],
+            });
+            return;
+          }
+          if (cast.reason === 'COOLDOWN') {
+            const sec = ((cast.remainingMs ?? 1000) / 1000).toFixed(1);
+            await interaction.editReply(`${timerIcon} Bạn vừa mới thả cần! Chờ **${sec}s** nữa nhé.`);
+            return;
+          }
+          await interaction.editReply(`${timerIcon} Bạn đang có một lượt câu cá chưa giật cần xong!`);
+          return;
+        }
+        const sentMessage = await interaction.editReply({
+          embeds: [buildFishingCastingEmbed(meta.displayName, meta.avatarUrl, cast)],
+          components: [buildFishingPullRow(cast.encounterId)],
+        });
+        this.scheduleFishingExpiry(
+          cast.encounterId,
+          sentMessage,
+          meta.displayName,
+          FISHING_BITE_TTL_MS,
+        );
+        return;
+      }
+
+      case 'market': {
+        await interaction.deferReply();
+        const sub = interaction.options.getSubcommand();
+        if (sub === 'sell') {
+          const pokemon = interaction.options.getString('pokemon', true);
+          const price = interaction.options.getInteger('price', true);
+          const res = await marketService.listCreature(meta, pokemon, price);
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({
+            embeds: [buildMarketListSuccessEmbed(meta.displayName, res.listing)],
+          });
+          return;
+        }
+        if (sub === 'buy') {
+          const listingNo = interaction.options.getInteger('id', true);
+          const preview = await marketService.getListingPreview(listingNo);
+          if (!preview) {
+            await interaction.editReply(
+              buildErrorNotice(`Không tìm thấy đơn hàng chợ \`#${listingNo}\` đang mở bán.`),
+            );
+            return;
+          }
+          if (preview.sellerId === meta.userId) {
+            await interaction.editReply(
+              buildErrorNotice(`Đây là Pokémon của bạn. Dùng \`/market cancel ${listingNo}\` để gỡ xuống.`),
+            );
+            return;
+          }
+          await interaction.editReply({
+            embeds: [buildMarketBuyConfirmEmbed(meta.displayName, preview)],
+            components: [buildMarketBuyConfirmRow(meta.userId, listingNo)],
+          });
+          return;
+        }
+        if (sub === 'cancel') {
+          const listingNo = interaction.options.getInteger('id', true);
+          const res = await marketService.cancelListing(meta, listingNo);
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply(
+            `${botEmojiRegistry.getCheckMention()} Đã gỡ đơn hàng \`#${listingNo}\` (**${res.listing.speciesName}**) khỏi chợ.`,
+          );
+          return;
+        }
+        const filter = interaction.options.getString('filter') ?? '';
+        const page = interaction.options.getInteger('page') ?? 1;
+        const browse = await marketService.browseMarket(page, filter);
+        await interaction.editReply({
+          embeds: [buildMarketBrowseEmbed(browse, activePrefix)],
+          components:
+            browse.totalPages > 1
+              ? [buildMarketPaginationRow(meta.userId, browse.filter, browse.page, browse.totalPages)]
+              : [],
+        });
+        return;
+      }
+
+      case 'trade': {
+        await interaction.deferReply();
+        const sub = interaction.options.getSubcommand();
+        if (sub === 'start') {
+          const targetUser = interaction.options.getUser('user', true);
+          if (targetUser.bot) {
+            await interaction.editReply(buildErrorNotice('Không thể giao dịch với tài khoản Bot!'));
+            return;
+          }
+          const pokemon = interaction.options.getString('pokemon') ?? undefined;
+          const coins = interaction.options.getInteger('coins') ?? 0;
+          const res = await marketService.startTrade(
+            meta,
+            extractTrainerMeta(targetUser),
+            pokemon,
+            coins,
+          );
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({
+            embeds: [buildTradeEmbed(res.trade, activePrefix)],
+            components: [buildTradeButtonsRow(res.trade)],
+          });
+          return;
+        }
+        if (sub === 'offer') {
+          const pokemon = interaction.options.getString('pokemon') ?? undefined;
+          const coins = interaction.options.getInteger('coins') ?? 0;
+          const res = await marketService.setTradeOffer(meta, pokemon, coins);
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({
+            embeds: [buildTradeEmbed(res.trade, activePrefix)],
+            components: [buildTradeButtonsRow(res.trade)],
+          });
+          return;
+        }
+        if (sub === 'confirm') {
+          const res = await marketService.confirmTrade(meta, undefined, `slash-tr:${interaction.id}`);
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({
+            embeds: [buildTradeEmbed(res.trade, activePrefix)],
+            components: res.trade.status === 'PENDING' ? [buildTradeButtonsRow(res.trade)] : [],
+          });
+          return;
+        }
+        if (sub === 'cancel') {
+          const res = await marketService.cancelTrade(meta.userId);
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({
+            embeds: [buildTradeEmbed(res.trade, activePrefix)],
+            components: [],
+          });
+          return;
+        }
+        const active = await marketService.getActiveTrade(meta.userId);
+        if (!active) {
+          await interaction.editReply('Bạn hiện không có phiên giao dịch nào đang mở.');
+          return;
+        }
+        await interaction.editReply({
+          embeds: [buildTradeEmbed(active, activePrefix)],
+          components: [buildTradeButtonsRow(active)],
+        });
+        return;
+      }
+
+      case 'battle': {
+        await interaction.deferReply();
+        const sub = interaction.options.getSubcommand();
+        if (sub === 'list') {
+          await trainerService.ensureTrainer(meta);
+          const profile = await trainerService.getTrainerProfile(meta.userId);
+          const gyms = battleService.getGymOverview(profile?.gymBadges ?? []);
+          await interaction.editReply({
+            embeds: [buildGymListEmbed(meta.displayName, gyms, activePrefix)],
+          });
+          return;
+        }
+        if (sub === 'gym') {
+          const stage = interaction.options.getInteger('stage') ?? undefined;
+          const res = await battleService.startGym(meta, stage);
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({
+            embeds: [buildBattleEmbed(res.battle)],
+            components: buildBattleActionRows(res.battle),
+          });
+          return;
+        }
+        if (sub === 'pvp') {
+          const targetUser = interaction.options.getUser('user', true);
+          if (targetUser.bot) {
+            await interaction.editReply(buildErrorNotice('Không thể thách đấu PvP với Bot! Hãy dùng `/battle pve` hoặc `/battle gym`.'));
+            return;
+          }
+          const res = await battleService.challengePvp(meta, extractTrainerMeta(targetUser));
+          if (!res.ok) {
+            await interaction.editReply(buildErrorNotice(res.message));
+            return;
+          }
+          await interaction.editReply({
+            content: `<@${targetUser.id}>`,
+            embeds: [buildBattleEmbed(res.battle)],
+            components: buildBattleActionRows(res.battle),
+          });
+          return;
+        }
+        const res = await battleService.startPve(meta);
+        if (!res.ok) {
+          await interaction.editReply(buildErrorNotice(res.message));
+          return;
+        }
+        await interaction.editReply({
+          embeds: [buildBattleEmbed(res.battle)],
+          components: buildBattleActionRows(res.battle),
+        });
+        return;
+      }
+
+      case 'verify': {
+        await interaction.deferReply();
+        await trainerService.ensureTrainer(meta);
+        const rawAnswer = interaction.options.getString('answer')?.trim();
+        if (!rawAnswer) {
+          const active = await captchaService.getActiveChallenge(meta.userId);
+          if (!active) {
+            await interaction.editReply('Bạn hiện không có yêu cầu xác minh nào.');
+            return;
+          }
+          await interaction.editReply({
+            embeds: [buildCaptchaEmbed(meta.displayName, active)],
+            components: [buildCaptchaButtonsRow(active)],
+          });
+          return;
+        }
+        const res = await captchaService.verifyChallenge(
+          meta,
+          rawAnswer,
+          `slash-cap:${interaction.id}`,
+        );
+        if (!res.ok) {
+          await interaction.editReply(buildErrorNotice(res.message));
+          return;
+        }
+        if (res.correct) {
+          await interaction.editReply({ embeds: [buildCaptchaSuccessEmbed(meta.displayName, res)] });
+          return;
+        }
+        await interaction.editReply({
+          content: res.penaltyUntil
+            ? `${crossIcon} Sai 3 lần! Tài khoản bị tạm khóa 5 phút trước khi thử lại.`
+            : `${crossIcon} Chưa chính xác! Bạn còn **${res.remainingAttempts}** lần thử.`,
+          embeds: [buildCaptchaEmbed(meta.displayName, res.updatedChallenge)],
+          components: [buildCaptchaButtonsRow(res.updatedChallenge)],
+        });
+        return;
+      }
     }
   }
 
@@ -709,6 +1169,13 @@ export class BotCommandRouter {
       case 'pokemon': {
         const result = await encounterService.spawnWildEncounter(meta, message.channelId);
         if (!result.ok) {
+          if (result.reason === 'CAPTCHA_REQUIRED' && result.captcha) {
+            await message.reply({
+              embeds: [buildCaptchaEmbed(meta.displayName, result.captcha)],
+              components: [buildCaptchaButtonsRow(result.captcha)],
+            });
+            return;
+          }
           if (result.reason === 'SPAWN_IN_FLIGHT') {
             return;
           }
@@ -806,7 +1273,6 @@ export class BotCommandRouter {
         return;
       }
 
-      case 'f':
       case 'fav':
       case 'favorite': {
         const target = parts.slice(1).join(' ') || undefined;
@@ -823,6 +1289,409 @@ export class BotCommandRouter {
         await message.reply(
           `${statusText}\n└ ${shiny}**${res.speciesName}** (${res.ivPercent}% IV · \`#${res.shortId}\`)`,
         );
+        return;
+      }
+
+      case 'f':
+      case 'fish': {
+        const sub = arg1?.toLowerCase();
+        if (sub === 'shop' || sub === 's') {
+          const gear = await fishingService.getFishingGear(meta);
+          await message.reply({ embeds: [buildFishingShopEmbed(gear, settings.prefix)] });
+          return;
+        }
+        if (sub === 'buy' || sub === 'b') {
+          if (!arg2) {
+            await message.reply(
+              `Cách dùng: \`${settings.prefix}f buy <mã> [số_lượng]\` (vd: \`${settings.prefix}f buy good\`, \`${settings.prefix}f buy lure 5\`).`,
+            );
+            return;
+          }
+          const qty = parts[3] ? Number.parseInt(parts[3], 10) : 1;
+          const res = await fishingService.buyFishingItem(
+            meta,
+            arg2,
+            Number.isNaN(qty) ? 0 : qty,
+            `msg-fbuy:${message.id}`,
+          );
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({ embeds: [buildBuyFishingItemEmbed(meta.displayName, res)] });
+          return;
+        }
+        const cast = await fishingService.castRod(meta, message.channelId);
+        if (!cast.ok) {
+          if (cast.reason === 'CAPTCHA_REQUIRED' && cast.captcha) {
+            await message.reply({
+              embeds: [buildCaptchaEmbed(meta.displayName, cast.captcha)],
+              components: [buildCaptchaButtonsRow(cast.captcha)],
+            });
+            return;
+          }
+          if (cast.reason === 'COOLDOWN') {
+            const sec = ((cast.remainingMs ?? 1000) / 1000).toFixed(1);
+            await message.reply(`${timerIcon} Bạn vừa mới thả cần! Chờ **${sec}s** nữa nhé.`);
+            return;
+          }
+          await message.reply(`${timerIcon} Bạn đang có một lượt câu cá chưa giật cần xong!`);
+          return;
+        }
+        const sentMessage = await message.reply({
+          embeds: [buildFishingCastingEmbed(meta.displayName, meta.avatarUrl, cast)],
+          components: [buildFishingPullRow(cast.encounterId)],
+        });
+        this.scheduleFishingExpiry(
+          cast.encounterId,
+          sentMessage,
+          meta.displayName,
+          FISHING_BITE_TTL_MS,
+        );
+        return;
+      }
+
+      case 'q':
+      case 'quest':
+      case 'quests': {
+        const sub = arg1?.toLowerCase();
+        if (sub === 'claim' || sub === 'c') {
+          const claimed = await questService.claimRewards(meta, `msg-quest:${message.id}`);
+          await message.reply({ embeds: [buildQuestClaimSuccessEmbed(meta.displayName, claimed)] });
+          return;
+        }
+        const summary = await questService.getQuestSummary(meta);
+        await message.reply({
+          embeds: [buildQuestsEmbed(meta.displayName, summary, settings.prefix)],
+          components: [buildQuestClaimRow(meta.userId, summary.claimableCount)],
+        });
+        return;
+      }
+
+      case 'bd':
+      case 'buddy': {
+        const sub = arg1?.toLowerCase();
+        if (sub === 'set') {
+          const query = parts.slice(2).join(' ') || undefined;
+          const res = await evolutionService.setBuddy(meta, query);
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({
+            embeds: [buildBuddyEmbed(meta.displayName, res.buddy, settings.prefix)],
+          });
+          return;
+        }
+        if (sub === 'train') {
+          const levels = arg2 ? Number.parseInt(arg2, 10) : 1;
+          const res = await evolutionService.trainBuddy(
+            meta,
+            Number.isNaN(levels) ? 1 : levels,
+            `msg-train:${message.id}`,
+          );
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({ embeds: [buildBuddyTrainEmbed(meta.displayName, res)] });
+          return;
+        }
+        await trainerService.ensureTrainer(meta);
+        const buddy = await evolutionService.getBuddyView(meta.userId);
+        await message.reply({ embeds: [buildBuddyEmbed(meta.displayName, buddy, settings.prefix)] });
+        return;
+      }
+
+      case 'ev':
+      case 'evo':
+      case 'evolve': {
+        const rest = parts.slice(1);
+        if (rest.length === 0) {
+          await trainerService.ensureTrainer(meta);
+          const candidates = await evolutionService.getEvolutionCandidates(meta.userId);
+          await message.reply({
+            embeds: [buildEvolutionCandidatesEmbed(meta.displayName, candidates, settings.prefix)],
+          });
+          return;
+        }
+        const targetQuery = rest[0]!;
+        const intoQuery = rest.slice(1).join(' ') || undefined;
+        const res = await evolutionService.evolveCreature(
+          meta,
+          targetQuery,
+          intoQuery,
+          `msg-evo:${message.id}`,
+        );
+        if (!res.ok) {
+          await message.reply(buildErrorNotice(res.message));
+          return;
+        }
+        await message.reply({ embeds: [buildEvolutionSuccessEmbed(meta.displayName, res)] });
+        return;
+      }
+
+      case 'mk':
+      case 'market': {
+        const sub = arg1?.toLowerCase() ?? 'browse';
+        if (sub === 'sell' || sub === 's') {
+          const rawPrice = parts[parts.length - 1];
+          const price = rawPrice && /^\d+$/.test(rawPrice) ? Number.parseInt(rawPrice, 10) : 0;
+          const pokemon = parts.slice(2, parts.length - 1).join(' ');
+          if (!pokemon || !price) {
+            await message.reply(
+              `Cách dùng: \`${settings.prefix}mk sell <tên|#mã> <giá_pc>\` (vd: \`${settings.prefix}mk sell Pikachu 5000\`).`,
+            );
+            return;
+          }
+          const res = await marketService.listCreature(meta, pokemon, price);
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({
+            embeds: [buildMarketListSuccessEmbed(meta.displayName, res.listing)],
+          });
+          return;
+        }
+        if (sub === 'buy' || sub === 'b') {
+          const listingNo = Number.parseInt((arg2 ?? '').replace(/^#/, ''), 10);
+          const preview = await marketService.getListingPreview(listingNo);
+          if (!preview) {
+            await message.reply(buildErrorNotice(`Không tìm thấy đơn hàng chợ \`#${arg2 ?? '?'}\`.`));
+            return;
+          }
+          if (preview.sellerId === meta.userId) {
+            await message.reply(
+              buildErrorNotice(`Đây là Pokémon của bạn. Dùng \`${settings.prefix}mk cancel ${listingNo}\` để gỡ.`),
+            );
+            return;
+          }
+          await message.reply({
+            embeds: [buildMarketBuyConfirmEmbed(meta.displayName, preview)],
+            components: [buildMarketBuyConfirmRow(meta.userId, listingNo)],
+          });
+          return;
+        }
+        if (sub === 'cancel' || sub === 'c') {
+          const listingNo = Number.parseInt((arg2 ?? '').replace(/^#/, ''), 10);
+          const res = await marketService.cancelListing(meta, listingNo);
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply(
+            `${botEmojiRegistry.getCheckMention()} Đã gỡ đơn hàng \`#${listingNo}\` (**${res.listing.speciesName}**) khỏi chợ.`,
+          );
+          return;
+        }
+        const filter = sub === 'browse' ? parts.slice(2).join(' ') : parts.slice(1).join(' ');
+        const browse = await marketService.browseMarket(1, filter);
+        await message.reply({
+          embeds: [buildMarketBrowseEmbed(browse, settings.prefix)],
+          components:
+            browse.totalPages > 1
+              ? [buildMarketPaginationRow(meta.userId, browse.filter, browse.page, browse.totalPages)]
+              : [],
+        });
+        return;
+      }
+
+      case 'tr':
+      case 'trade': {
+        const sub = arg1?.toLowerCase() ?? 'view';
+        if (sub === 'start' || parseUserMentionId(arg1)) {
+          const userArg = sub === 'start' ? arg2 : arg1;
+          const targetId = parseUserMentionId(userArg);
+          if (!targetId) {
+            await message.reply(
+              `Cách dùng: \`${settings.prefix}tr start @người_chơi [tên_pokemon] [coins]\``,
+            );
+            return;
+          }
+          const targetUser = await message.client.users.fetch(targetId).catch(() => null);
+          if (!targetUser || targetUser.bot) {
+            await message.reply(buildErrorNotice('Không tìm thấy người chơi hợp lệ để giao dịch!'));
+            return;
+          }
+          const offset = sub === 'start' ? 3 : 2;
+          const tail = parts.slice(offset);
+          let coins = 0;
+          if (tail.length > 0 && /^\d+$/.test(tail[tail.length - 1]!)) {
+            coins = Number.parseInt(tail.pop()!, 10);
+          }
+          const pokemon = tail.join(' ') || undefined;
+          const res = await marketService.startTrade(
+            meta,
+            extractTrainerMeta(targetUser),
+            pokemon,
+            coins,
+          );
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({
+            embeds: [buildTradeEmbed(res.trade, settings.prefix)],
+            components: [buildTradeButtonsRow(res.trade)],
+          });
+          return;
+        }
+        if (sub === 'offer') {
+          const tail = parts.slice(2);
+          let coins = 0;
+          if (tail.length > 0 && /^\d+$/.test(tail[tail.length - 1]!)) {
+            coins = Number.parseInt(tail.pop()!, 10);
+          }
+          const pokemon = tail.join(' ') || undefined;
+          const res = await marketService.setTradeOffer(meta, pokemon, coins);
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({
+            embeds: [buildTradeEmbed(res.trade, settings.prefix)],
+            components: [buildTradeButtonsRow(res.trade)],
+          });
+          return;
+        }
+        if (sub === 'confirm') {
+          const res = await marketService.confirmTrade(meta, undefined, `msg-tr:${message.id}`);
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({
+            embeds: [buildTradeEmbed(res.trade, settings.prefix)],
+            components: res.trade.status === 'PENDING' ? [buildTradeButtonsRow(res.trade)] : [],
+          });
+          return;
+        }
+        if (sub === 'cancel') {
+          const res = await marketService.cancelTrade(meta.userId);
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({
+            embeds: [buildTradeEmbed(res.trade, settings.prefix)],
+            components: [],
+          });
+          return;
+        }
+        const active = await marketService.getActiveTrade(meta.userId);
+        if (!active) {
+          await message.reply(
+            `Bạn hiện chưa mở phiên giao dịch nào. Dùng \`${settings.prefix}tr start @người_chơi\` để bắt đầu!`,
+          );
+          return;
+        }
+        await message.reply({
+          embeds: [buildTradeEmbed(active, settings.prefix)],
+          components: [buildTradeButtonsRow(active)],
+        });
+        return;
+      }
+
+      case 'bt':
+      case 'battle':
+      case 'gym': {
+        const isGymCmd = command === 'gym';
+        const sub = isGymCmd ? 'gym' : (arg1?.toLowerCase() ?? 'pve');
+        const gymArg = isGymCmd ? arg1 : arg2;
+
+        if (sub === 'list' || sub === 'gyms') {
+          await trainerService.ensureTrainer(meta);
+          const profile = await trainerService.getTrainerProfile(meta.userId);
+          const gyms = battleService.getGymOverview(profile?.gymBadges ?? []);
+          await message.reply({
+            embeds: [buildGymListEmbed(meta.displayName, gyms, settings.prefix)],
+          });
+          return;
+        }
+        if (sub === 'gym') {
+          const stage =
+            gymArg && /^\d+$/.test(gymArg) ? Number.parseInt(gymArg, 10) : undefined;
+          const res = await battleService.startGym(meta, stage);
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({
+            embeds: [buildBattleEmbed(res.battle)],
+            components: buildBattleActionRows(res.battle),
+          });
+          return;
+        }
+        const mentionTargetId = parseUserMentionId(sub === 'pvp' ? arg2 : arg1);
+        if (sub === 'pvp' || mentionTargetId) {
+          if (!mentionTargetId) {
+            await message.reply(
+              `Cách dùng: \`${settings.prefix}bt pvp @đối_thủ\``,
+            );
+            return;
+          }
+          const targetUser = await message.client.users.fetch(mentionTargetId).catch(() => null);
+          if (!targetUser || targetUser.bot) {
+            await message.reply(buildErrorNotice('Không tìm thấy đối thủ hợp lệ để thách đấu PvP!'));
+            return;
+          }
+          const res = await battleService.challengePvp(meta, extractTrainerMeta(targetUser));
+          if (!res.ok) {
+            await message.reply(buildErrorNotice(res.message));
+            return;
+          }
+          await message.reply({
+            content: `<@${targetUser.id}>`,
+            embeds: [buildBattleEmbed(res.battle)],
+            components: buildBattleActionRows(res.battle),
+          });
+          return;
+        }
+        const res = await battleService.startPve(meta);
+        if (!res.ok) {
+          await message.reply(buildErrorNotice(res.message));
+          return;
+        }
+        await message.reply({
+          embeds: [buildBattleEmbed(res.battle)],
+          components: buildBattleActionRows(res.battle),
+        });
+        return;
+      }
+
+      case 'verify':
+      case 'captcha': {
+        await trainerService.ensureTrainer(meta);
+        const answer = parts.slice(1).join(' ').trim();
+        if (!answer) {
+          const active = await captchaService.getActiveChallenge(meta.userId);
+          if (!active) {
+            await message.reply('Bạn hiện không có yêu cầu xác minh nào.');
+            return;
+          }
+          await message.reply({
+            embeds: [buildCaptchaEmbed(meta.displayName, active)],
+            components: [buildCaptchaButtonsRow(active)],
+          });
+          return;
+        }
+        const res = await captchaService.verifyChallenge(meta, answer, `msg-cap:${message.id}`);
+        if (!res.ok) {
+          await message.reply(buildErrorNotice(res.message));
+          return;
+        }
+        if (res.correct) {
+          await message.reply({ embeds: [buildCaptchaSuccessEmbed(meta.displayName, res)] });
+          return;
+        }
+        await message.reply({
+          content: res.penaltyUntil
+            ? `${crossIcon} Sai 3 lần! Tài khoản bị tạm khóa 5 phút trước khi thử lại.`
+            : `${crossIcon} Chưa chính xác! Bạn còn **${res.remainingAttempts}** lần thử.`,
+          embeds: [buildCaptchaEmbed(meta.displayName, res.updatedChallenge)],
+          components: [buildCaptchaButtonsRow(res.updatedChallenge)],
+        });
         return;
       }
 
@@ -975,7 +1844,216 @@ export class BotCommandRouter {
       return;
     }
 
-    if (!interaction.customId.startsWith('catch:')) {
+    if (interaction.customId.startsWith('captcha:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const ownerId = parts[2];
+      const optIdx = parts[3] ?? '';
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: `${crossIcon} Bạn không thể bấm xác minh thay người chơi khác!`,
+          ephemeral: true,
+        });
+        return;
+      }
+      const meta = extractTrainerMeta(interaction.user);
+      const res = await captchaService.verifyChallenge(meta, optIdx, `btn-cap:${interaction.id}`);
+      if (!res.ok) {
+        await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+        return;
+      }
+      if (res.correct) {
+        await interaction.editReply({
+          embeds: [buildCaptchaSuccessEmbed(meta.displayName, res)],
+          components: [],
+        });
+        return;
+      }
+      await interaction.editReply({
+        content: res.penaltyUntil
+          ? `${crossIcon} Sai 3 lần! Tài khoản tạm khóa 5 phút trước khi thử lại.`
+          : `${crossIcon} Sai rồi! Còn **${res.remainingAttempts}** lần thử.`,
+        embeds: [buildCaptchaEmbed(meta.displayName, res.updatedChallenge)],
+        components: [buildCaptchaButtonsRow(res.updatedChallenge)],
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith('quest:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const ownerId = parts[2];
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: `${crossIcon} Bạn không thể nhận thưởng nhiệm vụ của người chơi khác!`,
+          ephemeral: true,
+        });
+        return;
+      }
+      const meta = extractTrainerMeta(interaction.user);
+      const claimed = await questService.claimRewards(meta, `btn-quest:${interaction.id}`);
+      await interaction.editReply({
+        embeds: [buildQuestClaimSuccessEmbed(meta.displayName, claimed)],
+        components: [],
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith('fish:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const encounterId = parts[2];
+      if (!encounterId) {
+        return;
+      }
+      const meta = extractTrainerMeta(interaction.user);
+      const pull = await fishingService.pullHook(encounterId, interaction.user.id);
+      if (!pull.ok) {
+        await interaction.followUp({ content: `${timerIcon} ${pull.message}`, ephemeral: true });
+        return;
+      }
+      const sent = await interaction.editReply({
+        embeds: [buildFishingBiteEmbed(meta.displayName, pull)],
+        components: [buildCatchButtonsRow(encounterId, pull.ballInventory, false, 'fishcatch')],
+      });
+      this.scheduleFishingExpiry(
+        encounterId,
+        sent,
+        meta.displayName,
+        FISHING_CATCH_TTL_MS,
+      );
+      return;
+    }
+
+    if (interaction.customId.startsWith('mk:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const action = parts[1];
+      const ownerId = parts[2];
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: `${crossIcon} Thao tác chợ này không dành cho bạn!`,
+          ephemeral: true,
+        });
+        return;
+      }
+      const meta = extractTrainerMeta(interaction.user);
+      if (action === 'abort') {
+        await interaction.editReply({
+          content: 'Đã hủy mua hàng trên chợ.',
+          embeds: [],
+          components: [],
+        });
+        return;
+      }
+      if (action === 'page') {
+        const targetPage = Number.parseInt(parts[3] ?? '1', 10);
+        const filter = decodeURIComponent(parts[4] ?? '');
+        const browse = await marketService.browseMarket(
+          Number.isNaN(targetPage) ? 1 : targetPage,
+          filter,
+        );
+        await interaction.editReply({
+          embeds: [buildMarketBrowseEmbed(browse, this.defaultPrefix)],
+          components:
+            browse.totalPages > 1
+              ? [buildMarketPaginationRow(ownerId, browse.filter, browse.page, browse.totalPages)]
+              : [],
+        });
+        return;
+      }
+      if (action === 'buy') {
+        const listingNo = Number.parseInt(parts[3] ?? '0', 10);
+        const res = await marketService.buyListing(meta, listingNo, `btn-mkbuy:${interaction.id}`);
+        if (!res.ok) {
+          await interaction.editReply({
+            content: buildErrorNotice(res.message),
+            embeds: [],
+            components: [],
+          });
+          return;
+        }
+        await interaction.editReply({
+          content: `${botEmojiRegistry.getCheckMention()} **${meta.displayName}** đã mua thành công **${res.listing.speciesName}** (#${res.listing.listingNo}) giá **${res.listing.price.toLocaleString('en-US')} PC**! Số dư còn: **${(res.newBuyerCoins ?? 0).toLocaleString('en-US')} PC**.`,
+          embeds: [],
+          components: [],
+        });
+        return;
+      }
+      return;
+    }
+
+    if (interaction.customId.startsWith('tr:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const action = parts[1];
+      const tradeId = parts[2];
+      const meta = extractTrainerMeta(interaction.user);
+      const res =
+        action === 'cancel'
+          ? await marketService.cancelTrade(interaction.user.id, tradeId)
+          : await marketService.confirmTrade(meta, tradeId, `btn-tr:${interaction.id}`);
+
+      if (!res.ok) {
+        await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+        return;
+      }
+      await interaction.editReply({
+        embeds: [buildTradeEmbed(res.trade, this.defaultPrefix)],
+        components: res.trade.status === 'PENDING' ? [buildTradeButtonsRow(res.trade)] : [],
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith('bt:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const sub = parts[1];
+      const battleId = parts[2];
+      if (!battleId) {
+        return;
+      }
+
+      if (sub === 'accept' || sub === 'decline') {
+        const res = battleService.respondPvpChallenge(
+          battleId,
+          interaction.user.id,
+          sub === 'accept',
+        );
+        if (!res.ok) {
+          await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+          return;
+        }
+        await interaction.editReply({
+          content: '',
+          embeds: [buildBattleEmbed(res.battle)],
+          components: buildBattleActionRows(res.battle),
+        });
+        return;
+      }
+
+      const rawMove = sub === 'forfeit' ? 'forfeit' : (parts[3] as BattleMoveAction | undefined);
+      const action: BattleMoveAction | 'forfeit' = rawMove ?? 'primary';
+      const res = await battleService.takeTurn(
+        battleId,
+        interaction.user.id,
+        action,
+        interaction.id,
+      );
+      if (!res.ok) {
+        await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+        return;
+      }
+      await interaction.editReply({
+        content: '',
+        embeds: [buildBattleEmbed(res.battle)],
+        components: buildBattleActionRows(res.battle),
+      });
+      return;
+    }
+
+    const isFishingCatch = interaction.customId.startsWith('fishcatch:');
+    if (!interaction.customId.startsWith('catch:') && !isFishingCatch) {
       return;
     }
 
@@ -1015,12 +2093,9 @@ export class BotCommandRouter {
       return;
     }
 
-    const outcome = await encounterService.throwBall(
-      encounterId,
-      interaction.user.id,
-      ballId,
-      interaction.id,
-    );
+    const outcome: ThrowBallOutcome = isFishingCatch
+      ? await fishingService.catchHookedFish(encounterId, interaction.user.id, ballId, interaction.id)
+      : await encounterService.throwBall(encounterId, interaction.user.id, ballId, interaction.id);
 
     if (!outcome.ok) {
       await interaction.followUp({
@@ -1030,7 +2105,11 @@ export class BotCommandRouter {
       return;
     }
 
-    this.clearEncounterTimer(encounterId);
+    if (isFishingCatch) {
+      this.clearFishingTimer(encounterId);
+    } else {
+      this.clearEncounterTimer(encounterId);
+    }
 
     const meta = extractTrainerMeta(interaction.user);
     const emptyInventory: Record<BallId, number> = {
@@ -1040,10 +2119,11 @@ export class BotCommandRouter {
       premierball: 0,
       masterball: 0,
     };
+    const btnPrefix = isFishingCatch ? 'fishcatch' : 'catch';
 
     await interaction.editReply({
       embeds: [buildThrowingEmbed(meta.displayName, outcome.species, outcome.isShiny, outcome.ballId)],
-      components: [buildCatchButtonsRow(encounterId, emptyInventory, true)],
+      components: [buildCatchButtonsRow(encounterId, emptyInventory, true, btnPrefix)],
     });
 
     await new Promise<void>((resolve) => {
@@ -1052,7 +2132,9 @@ export class BotCommandRouter {
 
     await interaction.editReply({
       embeds: [buildCatchResultEmbed(meta.displayName, outcome)],
-      components: [buildCatchButtonsRow(encounterId, outcome.remainingBalls ?? emptyInventory, true)],
+      components: [
+        buildCatchButtonsRow(encounterId, outcome.remainingBalls ?? emptyInventory, true, btnPrefix),
+      ],
     });
   }
 }

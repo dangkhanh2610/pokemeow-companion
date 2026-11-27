@@ -7,6 +7,7 @@ export interface CatchCalculationInput {
   readonly isShiny: boolean;
   readonly trainerLevel: number;
   readonly ballId: BallId;
+  readonly hasBuddyBonus?: boolean;
 }
 
 export interface ICatchStrategy {
@@ -21,8 +22,9 @@ export class StandardBallCatchStrategy implements ICatchStrategy {
   public calculateChance(input: CatchCalculationInput): number {
     const ball = getBallSpec(input.ballId);
     const levelBonus = Math.min(input.trainerLevel * 0.0025, 0.08);
+    const buddyBonus = input.hasBuddyBonus ? 0.04 : 0;
     const shinyPenalty = input.isShiny ? 0.72 : 1.0;
-    const raw = input.baseCatchRate * ball.multiplier * shinyPenalty + levelBonus;
+    const raw = input.baseCatchRate * ball.multiplier * shinyPenalty + levelBonus + buddyBonus;
     return clampChance(raw);
   }
 }
@@ -31,6 +33,7 @@ export class PremierBallCatchStrategy implements ICatchStrategy {
   public calculateChance(input: CatchCalculationInput): number {
     const ball = getBallSpec(input.ballId);
     const levelBonus = Math.min(input.trainerLevel * 0.0025, 0.08);
+    const buddyBonus = input.hasBuddyBonus ? 0.04 : 0;
     const isHighValue =
       input.isShiny ||
       input.rarity === 'super_rare' ||
@@ -38,7 +41,11 @@ export class PremierBallCatchStrategy implements ICatchStrategy {
       input.rarity === 'mega';
     const premierBonus = isHighValue ? 0.15 : 0;
     const shinyPenalty = input.isShiny ? 0.78 : 1.0;
-    const raw = input.baseCatchRate * ball.multiplier * shinyPenalty + levelBonus + premierBonus;
+    const raw =
+      input.baseCatchRate * ball.multiplier * shinyPenalty +
+      levelBonus +
+      buddyBonus +
+      premierBonus;
     return clampChance(raw);
   }
 }

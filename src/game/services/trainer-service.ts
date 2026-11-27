@@ -25,6 +25,15 @@ export interface TrainerBagSummary {
   readonly lastDailyAt: Date | null;
   readonly uniqueSpeciesCount: number;
   readonly activeCreatureCount: number;
+  readonly fishingRod: string;
+  readonly gymBadges: readonly string[];
+  readonly battleWins: number;
+  readonly buddy: {
+    readonly speciesName: string;
+    readonly level: number;
+    readonly isShiny: boolean;
+    readonly ivPercent: number;
+  } | null;
   readonly balls: Readonly<Record<BallId, number>>;
   readonly topCreatures: readonly {
     readonly id: string;
@@ -322,7 +331,7 @@ export class TrainerService {
       return null;
     }
 
-    const [activeCreatureCount, distinctSpecies, topCreatures] = await withDbRetry(() =>
+    const [activeCreatureCount, distinctSpecies, topCreatures, buddyRow] = await withDbRetry(() =>
       Promise.all([
         prisma.caughtCreature.count({
           where: { userId, released: false },
@@ -348,6 +357,22 @@ export class TrainerService {
             caughtAt: true,
           },
         }),
+        trainer.buddyCreatureId
+          ? prisma.caughtCreature.findFirst({
+              where: {
+                id: trainer.buddyCreatureId,
+                userId,
+                released: false,
+                inMarket: false,
+              },
+              select: {
+                speciesName: true,
+                level: true,
+                isShiny: true,
+                ivPercent: true,
+              },
+            })
+          : Promise.resolve(null),
       ]),
     );
 
@@ -373,6 +398,10 @@ export class TrainerService {
       lastDailyAt: trainer.lastDailyAt,
       uniqueSpeciesCount: distinctSpecies.length,
       activeCreatureCount,
+      fishingRod: trainer.fishingRod,
+      gymBadges: trainer.gymBadges,
+      battleWins: trainer.battleWins,
+      buddy: buddyRow,
       balls,
       topCreatures,
     };

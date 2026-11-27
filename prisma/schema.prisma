@@ -8,34 +8,44 @@ datasource db {
 }
 
 model Trainer {
-  userId          String               @id
-  username        String
-  displayName     String               @default("")
-  avatarUrl       String               @default("")
-  coins           Int                  @default(2500)
-  xp              Int                  @default(0)
-  level           Int                  @default(1)
-  totalCatches    Int                  @default(0)
-  totalEncounters Int                  @default(0)
-  shinyCatches    Int                  @default(0)
-  dailyStreak     Int                  @default(0)
-  lastDailyAt     DateTime?
-  lastWildAt      DateTime?
-  lastRescueAt    DateTime?
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
-  inventory       InventoryItem[]
-  creatures       CaughtCreature[]
-  encounters      ActiveEncounter[]
-  transactions    EconomyTransaction[]
+  userId              String               @id
+  username            String
+  displayName         String               @default("")
+  avatarUrl           String               @default("")
+  coins               Int                  @default(2500)
+  xp                  Int                  @default(0)
+  level               Int                  @default(1)
+  totalCatches        Int                  @default(0)
+  totalEncounters     Int                  @default(0)
+  shinyCatches        Int                  @default(0)
+  dailyStreak         Int                  @default(0)
+  lastDailyAt         DateTime?
+  lastWildAt          DateTime?
+  lastRescueAt        DateTime?
+  buddyCreatureId     String?
+  fishingRod          String               @default("old_rod")
+  lastFishAt          DateTime?
+  gymBadges           String[]             @default([])
+  battleWins          Int                  @default(0)
+  actionsSinceVerify  Int                  @default(0)
+  nextVerifyThreshold Int                  @default(88)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  inventory           InventoryItem[]
+  creatures           CaughtCreature[]
+  encounters          ActiveEncounter[]
+  transactions        EconomyTransaction[]
+  quests              TrainerQuest[]
+  captcha             CaptchaChallenge?
+  marketListings      MarketListing[]
 }
 
 model InventoryItem {
-  id        String  @id @default(cuid())
-  userId    String
-  itemId    String
-  quantity  Int     @default(0)
-  trainer   Trainer @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  id       String  @id @default(cuid())
+  userId   String
+  itemId   String
+  quantity Int     @default(0)
+  trainer  Trainer @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   @@unique([userId, itemId])
 }
@@ -51,8 +61,10 @@ model CaughtCreature {
   ivPercent   Float
   ivsJson     Json
   level       Int      @default(1)
+  xp          Int      @default(0)
   ballUsed    String
   isFavorite  Boolean  @default(false)
+  inMarket    Boolean  @default(false)
   released    Boolean  @default(false)
   caughtAt    DateTime @default(now())
   trainer     Trainer  @relation(fields: [userId], references: [userId], onDelete: Cascade)
@@ -100,4 +112,95 @@ model GuildConfig {
   allowedChannels String[]  @default([])
   blockedChannels String[]  @default([])
   updatedAt       DateTime  @updatedAt
+}
+
+model TrainerQuest {
+  id          String   @id @default(cuid())
+  userId      String
+  period      String
+  periodKey   String
+  slotIndex   Int
+  questCode   String
+  targetValue Int
+  progress    Int      @default(0)
+  claimed     Boolean  @default(false)
+  rewardCoins Int
+  rewardBall  String
+  rewardQty   Int
+  createdAt   DateTime @default(now())
+  trainer     Trainer  @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@unique([userId, period, periodKey, slotIndex])
+  @@index([userId, period, periodKey])
+}
+
+model FishingEncounter {
+  id        String   @id @default(cuid())
+  userId    String
+  channelId String
+  rodId     String
+  baitId    String?
+  speciesId Int
+  isShiny   Boolean  @default(false)
+  ivsJson   Json
+  status    String   @default("BITING")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId, status])
+}
+
+model MarketListing {
+  id          String    @id @default(cuid())
+  listingNo   Int       @unique @default(autoincrement())
+  sellerId    String
+  sellerName  String
+  buyerId     String?
+  creatureId  String
+  speciesId   Int
+  speciesName String
+  rarity      String
+  isShiny     Boolean   @default(false)
+  ivPercent   Float
+  level       Int       @default(1)
+  price       Int
+  status      String    @default("ACTIVE")
+  createdAt   DateTime  @default(now())
+  soldAt      DateTime?
+  seller      Trainer   @relation(fields: [sellerId], references: [userId], onDelete: Cascade)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([sellerId, status])
+}
+
+model TradeSession {
+  id                 String   @id @default(cuid())
+  initiatorId        String
+  initiatorName      String
+  targetId           String
+  targetName         String
+  initiatorCreature  String?
+  initiatorCoins     Int      @default(0)
+  targetCreature     String?
+  targetCoins        Int      @default(0)
+  initiatorConfirmed Boolean  @default(false)
+  targetConfirmed    Boolean  @default(false)
+  status             String   @default("PENDING")
+  expiresAt          DateTime
+  createdAt          DateTime @default(now())
+
+  @@index([initiatorId, status])
+  @@index([targetId, status])
+}
+
+model CaptchaChallenge {
+  userId        String    @id
+  speciesId     Int
+  question      String
+  correctAnswer String
+  optionsJson   Json
+  attempts      Int       @default(0)
+  penaltyUntil  DateTime?
+  createdAt     DateTime  @default(now())
+  trainer       Trainer   @relation(fields: [userId], references: [userId], onDelete: Cascade)
 }
