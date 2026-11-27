@@ -53,6 +53,40 @@ function formatNumber(n: number): string {
   return n.toLocaleString('en-US');
 }
 
+function splitLinesIntoFields(
+  title: string,
+  lines: readonly string[],
+  maxLen = 960,
+): { name: string; value: string; inline: boolean }[] {
+  if (lines.length === 0) {
+    return [{ name: title, value: '-', inline: false }];
+  }
+
+  const fields: { name: string; value: string; inline: boolean }[] = [];
+  let current = '';
+
+  const pushChunk = (text: string): void => {
+    const fieldName = fields.length === 0 ? title : `${title} (tiếp)`;
+    fields.push({ name: fieldName, value: text.slice(0, 1024), inline: false });
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.length > maxLen ? `${rawLine.slice(0, maxLen - 3)}...` : rawLine;
+    const candidate = current ? `${current}\n${line}` : line;
+    if (candidate.length > maxLen && current.length > 0) {
+      pushChunk(current);
+      current = line;
+    } else {
+      current = candidate;
+    }
+  }
+
+  if (current) {
+    pushChunk(current);
+  }
+  return fields;
+}
+
 function isRarityTier(val: string): val is RarityTier {
   return (
     val === 'common' ||
@@ -660,9 +694,8 @@ function formatChallengerRow(c: ChallengerOverviewItem): string {
   const checkIcon = botEmojiRegistry.getCheckMention();
   const coinIcon = botEmojiRegistry.getCoinMention();
   const ballIcon = botEmojiRegistry.getBallMention(c.rewardBall);
-  const typeIcons = c.speciesTypes
-    .map((t) => botEmojiRegistry.getTypeMention(t) || t)
-    .join('');
+  const primaryType = c.speciesTypes[0] ?? 'Normal';
+  const typeIcon = botEmojiRegistry.getTypeMention(primaryType) || primaryType;
 
   const prefixMark = c.cleared
     ? `${checkIcon} \`#${c.stage}\``
@@ -671,10 +704,10 @@ function formatChallengerRow(c: ChallengerOverviewItem): string {
       : '`[KHÓA]`';
   const lineupStr = c.lineupNames.join(' · ');
   const rewardNote = c.cleared
-    ? `*Đã hạ (tái đấu ${coinIcon} ${formatNumber(Math.round(c.rewardCoins * 0.25))})*`
+    ? `*Tái đấu ${coinIcon} ${formatNumber(Math.round(c.rewardCoins * 0.25))}*`
     : `${coinIcon} **${formatNumber(c.rewardCoins)}** + ${ballIcon} **${c.rewardQty}x**`;
 
-  return `${prefixMark} ${typeIcons} **${c.leaderName}** (\`Lv.${c.level}\`) — ${rewardNote}\n└ Đội hình: *${lineupStr}*`;
+  return `${prefixMark} ${typeIcon} **${c.leaderName}** (\`Lv.${c.level}\`) — ${rewardNote}\n└ *${lineupStr}*`;
 }
 
 export function buildChallengerListEmbed(
@@ -696,16 +729,18 @@ export function buildChallengerListEmbed(
       ].join('\n'),
     )
     .addFields(
-      {
-        name: '8 Thủ Lĩnh Gym Kanto (#1 Brock → #8 Giovanni)',
-        value: officialGyms.map(formatChallengerRow).join('\n'),
-        inline: false,
-      },
-      {
-        name: 'Tứ Đại Thiên Vương & Nhà Vô Địch (#9 – #13)',
-        value: elites.map(formatChallengerRow).join('\n'),
-        inline: false,
-      },
+      ...splitLinesIntoFields(
+        'Kanto Gym #1 – #4 (Brock → Erika)',
+        officialGyms.slice(0, 4).map(formatChallengerRow),
+      ),
+      ...splitLinesIntoFields(
+        'Kanto Gym #5 – #8 (Koga → Giovanni)',
+        officialGyms.slice(4).map(formatChallengerRow),
+      ),
+      ...splitLinesIntoFields(
+        'Tứ Đại Thiên Vương & Nhà Vô Địch (#9 – #13)',
+        elites.map(formatChallengerRow),
+      ),
     )
     .setFooter({
       text: `PokeNyan Arena  ·  Thắng Challenger trước để mở khóa người tiếp theo  ·  ${prefix}ms để mua thêm chiêu`,
@@ -1005,11 +1040,11 @@ export function buildTeamEmbed(
     .setColor(0x0ea5e9)
     .setTitle(`Đội Hình Chiến Đấu (3v3) · ${displayName}`)
     .setDescription(headerParts.join('\n'))
-    .addFields({
-      name: 'Danh Sách 3 Ô Đội Hình',
-      value: slotLines.join('\n\n'),
-      inline: false,
-    })
+    .addFields(
+      ...splitLinesIntoFields('Ô #1 · Xuất Trận Đầu', [slotLines[0]!]),
+      ...splitLinesIntoFields('Ô #2 · Đội Hình', [slotLines[1]!]),
+      ...splitLinesIntoFields('Ô #3 · Đội Hình', [slotLines[2]!]),
+    )
     .setFooter({
       text: `Lệnh nhanh: ${prefix}team set <1-3> <tên> · ${prefix}team swap <1-3> <1-3> · ${prefix}team auto`,
     });
@@ -1104,16 +1139,8 @@ export function buildMoveShopEmbed(
     .setTitle(`Cửa Hàng Kỹ Năng · ${shiny}${view.species.name} (Lv.${view.level})`)
     .setDescription(descParts.join('\n'))
     .addFields(
-      {
-        name: `Bộ Chiêu Hiện Tại (${view.equippedMoves.length}/4 Ô)`,
-        value: equippedLines.join('\n'),
-        inline: false,
-      },
-      {
-        name: `Danh Sách Kỹ Năng Riêng Của ${view.species.name}`,
-        value: shopLines.join('\n'),
-        inline: false,
-      },
+      ...splitLinesIntoFields(`Bộ Chiêu Hiện Tại (${view.equippedMoves.length}/4 Ô)`, equippedLines),
+      ...splitLinesIntoFields(`Danh Sách Kỹ Năng Riêng Của ${view.species.name}`, shopLines),
     )
     .setThumbnail(
       view.isShiny ? view.species.shinyAnimatedSpriteUrl : view.species.animatedSpriteUrl,

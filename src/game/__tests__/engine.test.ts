@@ -13,7 +13,13 @@ import {
   getEffectiveSpeed,
   getTypeEffectiveness,
 } from '../engine/battle-engine';
-import { CHALLENGER_ROSTER } from '../services/battle-service';
+import { battleService, CHALLENGER_ROSTER } from '../services/battle-service';
+import { botEmojiRegistry } from '../../bot/emoji-registry';
+import {
+  buildChallengerListEmbed,
+  buildMoveShopEmbed,
+  buildTeamEmbed,
+} from '../../bot/ui/feature-embeds';
 import { CatchStrategyRegistry } from '../engine/catch-strategy';
 import {
   applyXp,
@@ -435,6 +441,120 @@ describe('PokéVerse RPG Core Engine', () => {
     releaseEncounterLock('user-lock-test');
     assert.equal(tryAcquireEncounterLock('user-lock-test'), true);
     releaseEncounterLock('user-lock-test');
+
+    // Discord Embed 1024-char field limit regression test with full 38-char custom emojis
+    const origCheck = botEmojiRegistry.getCheckMention.bind(botEmojiRegistry);
+    const origCoin = botEmojiRegistry.getCoinMention.bind(botEmojiRegistry);
+    const origBall = botEmojiRegistry.getBallMention.bind(botEmojiRegistry);
+    const origType = botEmojiRegistry.getTypeMention.bind(botEmojiRegistry);
+    const origShiny = botEmojiRegistry.getShinyMention.bind(botEmojiRegistry);
+    const origFav = botEmojiRegistry.getFavMention.bind(botEmojiRegistry);
+    try {
+      botEmojiRegistry.getCheckMention = () => '<:pn_ui_check:1376543210987654321>';
+      botEmojiRegistry.getCoinMention = () => '<:pn_ui_coin:1376543210987654322>';
+      botEmojiRegistry.getBallMention = (id) => `<:pn_${id}:1376543210987654323>`;
+      botEmojiRegistry.getTypeMention = (t) => `<:pn_type_${t.toLowerCase()}:1376543210987654324>`;
+      botEmojiRegistry.getShinyMention = () => '<:pn_r3_shiny:1376543210987654325>';
+      botEmojiRegistry.getFavMention = () => '<:pn_ui_fav:1376543210987654326>';
+
+      const overview = battleService.getChallengerOverview([
+        'boulder',
+        'cascade',
+        'thunder',
+        'rainbow',
+      ]);
+      const gymJson = buildChallengerListEmbed('Khanh', overview, ';').toJSON();
+      assert.ok((gymJson.fields?.length ?? 0) >= 3);
+      for (const f of gymJson.fields ?? []) {
+        assert.ok(f.value.length <= 1024, `Gym field "${f.name}" exceeded 1024 chars: ${f.value.length}`);
+      }
+
+      const dragonPool = getSpeciesMovePool(dragonite);
+      const msJson = buildMoveShopEmbed(
+        'Khanh',
+        {
+          creatureId: 'test-creature-id-123456',
+          shortId: '123456',
+          boxIndex: 1,
+          species: dragonite,
+          level: 80,
+          isShiny: true,
+          isBuddy: true,
+          ivPercent: 95.2,
+          trainerCoins: 250000,
+          starterMoves: dragonPool.starterMoves,
+          equippedMoves: [
+            dragonPool.starterMoves[0],
+            dragonPool.starterMoves[1],
+            dragonPool.shopMoves[0]!,
+            dragonPool.shopMoves[1]!,
+          ],
+          unlockedMoveIds: [dragonPool.shopMoves[0]!.id, dragonPool.shopMoves[1]!.id],
+          shopEntries: dragonPool.shopMoves.map((mv, idx) => ({
+            index: idx + 1,
+            move: mv,
+            unlocked: idx < 2,
+            equippedSlot: idx < 2 ? idx + 3 : null,
+          })),
+        },
+        ';',
+      ).toJSON();
+      for (const f of msJson.fields ?? []) {
+        assert.ok(f.value.length <= 1024, `MoveShop field "${f.name}" exceeded 1024 chars: ${f.value.length}`);
+      }
+
+      const charPool = getSpeciesMovePool(charizard);
+      const charStats = computeComputedStats(charizard, ivs, 85, true);
+      const teamMember = {
+        slot: 1 as const,
+        creatureId: 'team-id-123456',
+        shortId: '123456',
+        boxIndex: 1,
+        species: charizard,
+        isShiny: true,
+        isBuddy: true,
+        isFavorite: true,
+        level: 85,
+        xp: 0,
+        nextLevelXp: 1000,
+        ivs,
+        ivPercent: 91.4,
+        stats: charStats,
+        equippedMoves: [
+          charPool.starterMoves[0],
+          charPool.starterMoves[1],
+          charPool.shopMoves[0]!,
+          charPool.shopMoves[1]!,
+        ],
+      };
+      const teamJson = buildTeamEmbed(
+        'Khanh',
+        {
+          slots: [
+            teamMember,
+            { ...teamMember, slot: 2 as const },
+            { ...teamMember, slot: 3 as const },
+          ],
+          members: [
+            teamMember,
+            { ...teamMember, slot: 2 as const },
+            { ...teamMember, slot: 3 as const },
+          ],
+          totalCp: charStats.combatPower * 3,
+        },
+        ';',
+      ).toJSON();
+      for (const f of teamJson.fields ?? []) {
+        assert.ok(f.value.length <= 1024, `Team field "${f.name}" exceeded 1024 chars: ${f.value.length}`);
+      }
+    } finally {
+      botEmojiRegistry.getCheckMention = origCheck;
+      botEmojiRegistry.getCoinMention = origCoin;
+      botEmojiRegistry.getBallMention = origBall;
+      botEmojiRegistry.getTypeMention = origType;
+      botEmojiRegistry.getShinyMention = origShiny;
+      botEmojiRegistry.getFavMention = origFav;
+    }
 
     // 5. Inspector stats, 2 starter skills & defensive type matchups (with 0x immunities)
     const computedBlastoise = computeComputedStats(blastoise, ivs, 50, false);
