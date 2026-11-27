@@ -616,14 +616,17 @@ export class BattleService {
     }
 
     // PvE / Gym: lượt của người chơi + AI phản công (theo thứ tự Speed)
+    const rollAi = Math.random();
     const aiAction: BattleMoveAction =
       session.fighterB.hp < session.fighterB.maxHp * 0.35 &&
       session.fighterB.recoverUsesLeft > 0 &&
-      Math.random() < 0.55
+      rollAi < 0.55
         ? 'recover'
-        : session.fighterB.ultimateCooldown === 0 && Math.random() < 0.5
+        : session.fighterB.ultimateCooldown === 0 && rollAi < 0.45
           ? 'ultimate'
-          : 'primary';
+          : rollAi < 0.72
+            ? 'secondary'
+            : 'primary';
 
     const playerGoesFirst = session.fighterA.spd >= session.fighterB.spd;
     const roundLogs: string[] = [];

@@ -1,14 +1,35 @@
 import type { CreatureIVs, CreatureSpecies } from '../types';
 
-export type BattleMoveAction = 'primary' | 'ultimate' | 'recover';
+export type BattleMoveAction = 'primary' | 'secondary' | 'ultimate' | 'recover';
 
 export interface CombatMoveSpec {
-  readonly id: 'primary' | 'ultimate';
+  readonly id: 'primary' | 'secondary' | 'ultimate';
   readonly name: string;
   readonly type: string;
   readonly power: number;
   readonly accuracy: number;
   readonly category: 'physical' | 'special';
+  readonly critRate: number;
+  readonly cooldownTurns: number;
+  readonly description: string;
+}
+
+export interface ComputedCreatureStats {
+  readonly maxHp: number;
+  readonly atk: number;
+  readonly def: number;
+  readonly spAtk: number;
+  readonly spDef: number;
+  readonly spd: number;
+  readonly combatPower: number;
+  readonly primaryMove: CombatMoveSpec;
+  readonly secondaryMove: CombatMoveSpec;
+  readonly ultimateMove: CombatMoveSpec;
+}
+
+export interface DefensiveMatchupSummary {
+  readonly weaknesses: readonly { readonly type: string; readonly mult: number }[];
+  readonly resistances: readonly { readonly type: string; readonly mult: number }[];
 }
 
 export interface CombatantState {
@@ -28,6 +49,7 @@ export interface CombatantState {
   ultimateCooldown: number;
   recoverUsesLeft: number;
   readonly primaryMove: CombatMoveSpec;
+  readonly secondaryMove: CombatMoveSpec;
   readonly ultimateMove: CombatMoveSpec;
 }
 
@@ -42,6 +64,27 @@ export interface MoveExecutionResult {
   readonly isCrit: boolean;
   readonly logLine: string;
 }
+
+const ALL_TYPES: readonly string[] = [
+  'Normal',
+  'Fire',
+  'Water',
+  'Electric',
+  'Grass',
+  'Ice',
+  'Fighting',
+  'Poison',
+  'Ground',
+  'Flying',
+  'Psychic',
+  'Bug',
+  'Rock',
+  'Ghost',
+  'Dragon',
+  'Dark',
+  'Steel',
+  'Fairy',
+];
 
 // Bảng khắc chế 18 hệ Pokémon chuẩn (miễn nhiễm chuyển thành 0.2x trong 1v1 để tránh kẹt chiêu)
 const TYPE_EFFECTIVENESS_CHART: Readonly<Record<string, Readonly<Record<string, number>>>> = {
@@ -65,46 +108,109 @@ const TYPE_EFFECTIVENESS_CHART: Readonly<Record<string, Readonly<Record<string, 
   Fairy: { Fire: 0.5, Fighting: 2, Poison: 0.5, Dragon: 2, Dark: 2, Steel: 0.5 },
 };
 
-const TYPE_PRIMARY_NAMES: Readonly<Record<string, string>> = {
+const PHYSICAL_PRIMARY_MOVES: Readonly<Record<string, string>> = {
   Normal: 'Body Slam',
+  Fire: 'Fire Punch',
+  Water: 'Waterfall',
+  Electric: 'Wild Charge',
+  Grass: 'Leaf Blade',
+  Ice: 'Icicle Crash',
+  Fighting: 'Brick Break',
+  Poison: 'Poison Jab',
+  Ground: 'Earthquake',
+  Flying: 'Drill Peck',
+  Psychic: 'Zen Headbutt',
+  Bug: 'X-Scissor',
+  Rock: 'Rock Slide',
+  Ghost: 'Shadow Claw',
+  Dragon: 'Dragon Claw',
+  Dark: 'Crunch',
+  Steel: 'Iron Head',
+  Fairy: 'Play Rough',
+};
+
+const SPECIAL_PRIMARY_MOVES: Readonly<Record<string, string>> = {
+  Normal: 'Hyper Voice',
   Fire: 'Flamethrower',
   Water: 'Surf',
   Electric: 'Thunderbolt',
   Grass: 'Energy Ball',
   Ice: 'Ice Beam',
-  Fighting: 'Brick Break',
+  Fighting: 'Aura Sphere',
   Poison: 'Sludge Bomb',
-  Ground: 'Earthquake',
+  Ground: 'Earth Power',
   Flying: 'Air Slash',
   Psychic: 'Psychic',
-  Bug: 'X-Scissor',
-  Rock: 'Rock Slide',
+  Bug: 'Bug Buzz',
+  Rock: 'Power Gem',
   Ghost: 'Shadow Ball',
-  Dragon: 'Dragon Claw',
+  Dragon: 'Dragon Pulse',
   Dark: 'Dark Pulse',
   Steel: 'Flash Cannon',
   Fairy: 'Dazzling Gleam',
 };
 
-const TYPE_ULTIMATE_NAMES: Readonly<Record<string, string>> = {
+const PHYSICAL_ULTIMATE_MOVES: Readonly<Record<string, string>> = {
   Normal: 'Giga Impact',
+  Fire: 'Flare Blitz',
+  Water: 'Wave Crash',
+  Electric: 'Volt Tackle',
+  Grass: 'Wood Hammer',
+  Ice: 'Mountain Gale',
+  Fighting: 'Close Combat',
+  Poison: 'Gunk Shot',
+  Ground: 'Headlong Rush',
+  Flying: 'Brave Bird',
+  Psychic: 'Psychic Fangs',
+  Bug: 'Megahorn',
+  Rock: 'Stone Edge',
+  Ghost: 'Phantom Force',
+  Dragon: 'Outrage',
+  Dark: 'Foul Play',
+  Steel: 'Meteor Mash',
+  Fairy: 'Spirit Break',
+};
+
+const SPECIAL_ULTIMATE_MOVES: Readonly<Record<string, string>> = {
+  Normal: 'Hyper Beam',
   Fire: 'Fire Blast',
   Water: 'Hydro Pump',
   Electric: 'Thunder',
   Grass: 'Solar Beam',
   Ice: 'Blizzard',
-  Fighting: 'Close Combat',
-  Poison: 'Gunk Shot',
-  Ground: 'Earth Power',
-  Flying: 'Brave Bird',
+  Fighting: 'Focus Blast',
+  Poison: 'Sludge Wave',
+  Ground: 'Scorching Sands',
+  Flying: 'Hurricane',
   Psychic: 'Psystrike',
-  Bug: 'Megahorn',
-  Rock: 'Stone Edge',
+  Bug: 'Buggy Impact',
+  Rock: 'Meteor Beam',
   Ghost: 'Shadow Force',
-  Dragon: 'Outrage',
-  Dark: 'Foul Play',
-  Steel: 'Meteor Mash',
+  Dragon: 'Draco Meteor',
+  Dark: 'Night Daze',
+  Steel: 'Steel Beam',
   Fairy: 'Moonblast',
+};
+
+const MONO_TYPE_COVERAGE: Readonly<Record<string, string>> = {
+  Normal: 'Fighting',
+  Fire: 'Ground',
+  Water: 'Ice',
+  Electric: 'Steel',
+  Grass: 'Poison',
+  Ice: 'Water',
+  Fighting: 'Rock',
+  Poison: 'Dark',
+  Ground: 'Rock',
+  Flying: 'Normal',
+  Psychic: 'Fairy',
+  Bug: 'Grass',
+  Rock: 'Ground',
+  Ghost: 'Dark',
+  Dragon: 'Fire',
+  Dark: 'Ghost',
+  Steel: 'Rock',
+  Fairy: 'Psychic',
 };
 
 export function getTypeEffectiveness(
@@ -125,19 +231,38 @@ export function getTypeEffectiveness(
   return Number(mult.toFixed(2));
 }
 
+export function analyzeDefensiveMatchups(
+  defenderTypes: readonly string[],
+): DefensiveMatchupSummary {
+  const weaknesses: { readonly type: string; readonly mult: number }[] = [];
+  const resistances: { readonly type: string; readonly mult: number }[] = [];
+
+  for (const atkType of ALL_TYPES) {
+    const mult = getTypeEffectiveness(atkType, defenderTypes);
+    if (mult > 1) {
+      weaknesses.push({ type: atkType, mult });
+    } else if (mult < 1) {
+      resistances.push({ type: atkType, mult });
+    }
+  }
+
+  weaknesses.sort((a, b) => b.mult - a.mult);
+  resistances.sort((a, b) => a.mult - b.mult);
+
+  return { weaknesses, resistances };
+}
+
 function calcStat(base: number, iv: number, level: number, isHp: boolean): number {
   const scaled = Math.floor(((2 * base + iv) * level) / 100);
   return isHp ? scaled + level + 18 : scaled + 10;
 }
 
-export function buildCombatant(
+export function computeComputedStats(
   species: CreatureSpecies,
   ivs: CreatureIVs,
   level: number,
   isShiny: boolean,
-  ownerId: string,
-  ownerName: string,
-): CombatantState {
+): ComputedCreatureStats {
   const clampedLv = Math.max(1, Math.min(100, level));
   const shinyFactor = isShiny ? 1.05 : 1.0;
 
@@ -152,9 +277,84 @@ export function buildCombatant(
   );
   const spd = Math.round(calcStat(species.baseStats.spd, ivs.spd, clampedLv, false) * shinyFactor);
 
+  const combatPower = Math.round(
+    maxHp * 1.4 + (Math.max(atk, spAtk) * 1.8) + (def + spDef) * 0.9 + spd * 1.1,
+  );
+
   const primaryType = species.types[0] ?? 'Normal';
-  const secondaryType = species.types[1] ?? primaryType;
+  const secondaryType = species.types[1] ?? MONO_TYPE_COVERAGE[primaryType] ?? 'Normal';
   const preferPhysical = atk >= spAtk;
+  const category: 'physical' | 'special' = preferPhysical ? 'physical' : 'special';
+
+  const primaryMove: CombatMoveSpec = {
+    id: 'primary',
+    name:
+      (preferPhysical
+        ? PHYSICAL_PRIMARY_MOVES[primaryType]
+        : SPECIAL_PRIMARY_MOVES[primaryType]) ?? 'Tackle',
+    type: primaryType,
+    power: 85,
+    accuracy: 1.0,
+    category,
+    critRate: 0.1,
+    cooldownTurns: 0,
+    description: 'Chiêu chủ lực chính xác 100%, nhận STAB +25%',
+  };
+
+  const secondaryMove: CombatMoveSpec = {
+    id: 'secondary',
+    name:
+      (preferPhysical
+        ? PHYSICAL_PRIMARY_MOVES[secondaryType]
+        : SPECIAL_PRIMARY_MOVES[secondaryType]) ?? 'Swift',
+    type: secondaryType,
+    power: 95,
+    accuracy: 0.95,
+    category,
+    critRate: 0.22,
+    cooldownTurns: 0,
+    description: 'Chiêu phủ hệ tỷ lệ Chí Mạng cao (22%)',
+  };
+
+  const ultimateMove: CombatMoveSpec = {
+    id: 'ultimate',
+    name:
+      (preferPhysical
+        ? PHYSICAL_ULTIMATE_MOVES[primaryType]
+        : SPECIAL_ULTIMATE_MOVES[primaryType]) ?? 'Hyper Beam',
+    type: primaryType,
+    power: 125,
+    accuracy: 0.88,
+    category,
+    critRate: 0.12,
+    cooldownTurns: 2,
+    description: 'Tuyệt kỹ sát thương cực lớn (hồi 1 lượt sau khi tung)',
+  };
+
+  return {
+    maxHp,
+    atk,
+    def,
+    spAtk,
+    spDef,
+    spd,
+    combatPower,
+    primaryMove,
+    secondaryMove,
+    ultimateMove,
+  };
+}
+
+export function buildCombatant(
+  species: CreatureSpecies,
+  ivs: CreatureIVs,
+  level: number,
+  isShiny: boolean,
+  ownerId: string,
+  ownerName: string,
+): CombatantState {
+  const clampedLv = Math.max(1, Math.min(100, level));
+  const stats = computeComputedStats(species, ivs, clampedLv, isShiny);
 
   return {
     ownerId,
@@ -162,32 +362,19 @@ export function buildCombatant(
     species,
     isShiny,
     level: clampedLv,
-    maxHp,
-    hp: maxHp,
-    atk,
-    def,
-    spAtk,
-    spDef,
-    spd,
+    maxHp: stats.maxHp,
+    hp: stats.maxHp,
+    atk: stats.atk,
+    def: stats.def,
+    spAtk: stats.spAtk,
+    spDef: stats.spDef,
+    spd: stats.spd,
     offenseBuff: 1.0,
     ultimateCooldown: 0,
     recoverUsesLeft: 2,
-    primaryMove: {
-      id: 'primary',
-      name: TYPE_PRIMARY_NAMES[primaryType] ?? 'Tackle',
-      type: primaryType,
-      power: 85,
-      accuracy: 1.0,
-      category: preferPhysical ? 'physical' : 'special',
-    },
-    ultimateMove: {
-      id: 'ultimate',
-      name: TYPE_ULTIMATE_NAMES[secondaryType] ?? 'Hyper Beam',
-      type: secondaryType,
-      power: 125,
-      accuracy: 0.88,
-      category: preferPhysical ? 'physical' : 'special',
-    },
+    primaryMove: stats.primaryMove,
+    secondaryMove: stats.secondaryMove,
+    ultimateMove: stats.ultimateMove,
   };
 }
 
@@ -230,7 +417,13 @@ export function executeMove(
     };
   }
 
-  const move = action === 'ultimate' ? attacker.ultimateMove : attacker.primaryMove;
+  const move =
+    action === 'ultimate'
+      ? attacker.ultimateMove
+      : action === 'secondary'
+        ? attacker.secondaryMove
+        : attacker.primaryMove;
+
   if (action === 'ultimate') {
     attacker.ultimateCooldown = 2;
   }
@@ -254,7 +447,7 @@ export function executeMove(
   const defStat = move.category === 'physical' ? defender.def : defender.spDef;
   const stab = attacker.species.types.includes(move.type) ? 1.25 : 1.0;
   const effectiveness = getTypeEffectiveness(move.type, defender.species.types);
-  const isCrit = randomFn() < 0.1;
+  const isCrit = randomFn() < move.critRate;
   const critMult = isCrit ? 1.45 : 1.0;
   const variance = 0.9 + randomFn() * 0.12;
 

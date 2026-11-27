@@ -63,6 +63,8 @@ import {
   buildCaptchaButtonsRow,
   buildCaptchaEmbed,
   buildCaptchaSuccessEmbed,
+  buildCreatureInspectButtons,
+  buildCreatureInspectEmbed,
   buildErrorNotice,
   buildEvolutionCandidatesEmbed,
   buildEvolutionSuccessEmbed,
@@ -1039,6 +1041,29 @@ export class BotCommandRouter {
         });
         return;
       }
+
+      case 'info': {
+        await interaction.deferReply();
+        await trainerService.ensureTrainer(meta);
+        const query = interaction.options.getString('pokemon') ?? undefined;
+        const view = await trainerService.inspectCreature(meta.userId, query);
+        if (!view) {
+          await interaction.editReply(
+            buildErrorNotice(
+              query
+                ? `Không tìm thấy Pokémon nào khớp với \`${query}\` trong kho lẫn Pokédex.`
+                : 'Không tìm thấy dữ liệu Pokémon.',
+            ),
+          );
+          return;
+        }
+        await interaction.editReply({
+          embeds: [buildCreatureInspectEmbed(meta.displayName, view, activePrefix)],
+          components:
+            view.kind === 'OWNED' ? [buildCreatureInspectButtons(meta.userId, view)] : [],
+        });
+        return;
+      }
     }
   }
 
@@ -1718,10 +1743,52 @@ export class BotCommandRouter {
         return;
       }
 
+      case 'info':
+      case 'v':
+      case 'view':
+      case 'pi':
+      case 'pinfo': {
+        await trainerService.ensureTrainer(meta);
+        const query = parts.slice(1).join(' ').trim() || undefined;
+        const view = await trainerService.inspectCreature(meta.userId, query);
+        if (!view) {
+          await message.reply(
+            buildErrorNotice(
+              query
+                ? `Không tìm thấy Pokémon nào khớp với \`${query}\` trong kho lẫn Pokédex.`
+                : 'Không tìm thấy dữ liệu Pokémon.',
+            ),
+          );
+          return;
+        }
+        await message.reply({
+          embeds: [buildCreatureInspectEmbed(meta.displayName, view, settings.prefix)],
+          components:
+            view.kind === 'OWNED' ? [buildCreatureInspectButtons(meta.userId, view)] : [],
+        });
+        return;
+      }
+
       case 'pf':
       case 'profile':
       case 'stats': {
         await trainerService.ensureTrainer(meta);
+        if (command === 'stats' && parts.length > 1) {
+          const query = parts.slice(1).join(' ').trim();
+          const view = await trainerService.inspectCreature(meta.userId, query);
+          if (!view) {
+            await message.reply(
+              buildErrorNotice(`Không tìm thấy Pokémon nào khớp với \`${query}\`.`),
+            );
+            return;
+          }
+          await message.reply({
+            embeds: [buildCreatureInspectEmbed(meta.displayName, view, settings.prefix)],
+            components:
+              view.kind === 'OWNED' ? [buildCreatureInspectButtons(meta.userId, view)] : [],
+          });
+          return;
+        }
         const profile = await trainerService.getTrainerProfile(meta.userId);
         if (!profile) {
           return;
@@ -2001,6 +2068,79 @@ export class BotCommandRouter {
       await interaction.editReply({
         embeds: [buildTradeEmbed(res.trade, this.defaultPrefix)],
         components: res.trade.status === 'PENDING' ? [buildTradeButtonsRow(res.trade)] : [],
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith('info:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const action = parts[1];
+      const ownerId = parts[2];
+      const arg = parts[3] ?? '';
+
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: `${crossIcon} Bạn không thể thao tác bảng chỉ số Pokémon của người khác!`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const meta = extractTrainerMeta(interaction.user);
+
+      if (action === 'nav') {
+        const offsetIdx = Number.parseInt(arg, 10);
+        const view = await trainerService.inspectOwnedByOffset(
+          ownerId,
+          Number.isNaN(offsetIdx) ? 0 : offsetIdx,
+        );
+        if (!view) {
+          await interaction.followUp({
+            content: buildErrorNotice('Không tìm thấy Pokémon ở vị trí này.'),
+            ephemeral: true,
+          });
+          return;
+        }
+        await interaction.editReply({
+          embeds: [buildCreatureInspectEmbed(meta.displayName, view, this.defaultPrefix)],
+          components: [buildCreatureInspectButtons(ownerId, view)],
+        });
+        return;
+      }
+
+      if (action === 'buddy') {
+        const res = await evolutionService.setBuddy(meta, arg);
+        if (!res.ok) {
+          await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+          return;
+        }
+      } else if (action === 'fav') {
+        const res = await trainerService.toggleFavorite(meta, arg);
+        if (!res.ok) {
+          await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+          return;
+        }
+      } else if (action === 'train') {
+        const res = await trainerService.trainSpecificCreature(
+          meta,
+          arg,
+          1,
+          `btn-infotrain:${interaction.id}`,
+        );
+        if (!res.ok) {
+          await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+          return;
+        }
+      }
+
+      const refreshed = await trainerService.inspectCreatureById(ownerId, arg);
+      if (!refreshed) {
+        return;
+      }
+      await interaction.editReply({
+        embeds: [buildCreatureInspectEmbed(meta.displayName, refreshed, this.defaultPrefix)],
+        components: [buildCreatureInspectButtons(ownerId, refreshed)],
       });
       return;
     }

@@ -411,4 +411,15 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
         .setRequired(false),
     )
     .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('info')
+    .setDescription('Xem đầy đủ chỉ số, IV từng dòng, khắc hệ và 4 skill chiến đấu của Pokémon')
+    .addStringOption((opt) =>
+      opt
+        .setName('pokemon')
+        .setDescription('Tên Pokémon, số thứ tự kho (;d), #mã ngắn hoặc loài bất kỳ (bỏ trống = Buddy)')
+        .setRequired(false),
+    )
+    .toJSON(),
 ];

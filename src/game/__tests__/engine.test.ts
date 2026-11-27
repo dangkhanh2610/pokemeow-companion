@@ -3,7 +3,13 @@ import { describe, it } from 'node:test';
 import { BALL_CATALOG, getBallSpec, resolveBallId } from '../catalog/ball-catalog';
 import { defaultCreatureCatalog, PokemonCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-catalog';
 import { getWaterPools, resolveBaitId, resolveRodId, ROD_CATALOG } from '../catalog/fishing-catalog';
-import { buildCombatant, executeMove, getTypeEffectiveness } from '../engine/battle-engine';
+import {
+  analyzeDefensiveMatchups,
+  buildCombatant,
+  computeComputedStats,
+  executeMove,
+  getTypeEffectiveness,
+} from '../engine/battle-engine';
 import { CatchStrategyRegistry } from '../engine/catch-strategy';
 import { applyXp, computeIvSummary, SHINY_CHANCE, SpawnEngine, xpForNextLevel } from '../engine/spawn-engine';
 import { rollNextCaptchaThreshold } from '../services/captcha-service';
@@ -305,7 +311,24 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.ok(hitRes.damageDealt > 0);
     assert.ok(combatB.hp < combatB.maxHp);
 
-    // 5. Captcha threshold range [80..100]
+    // 5. Inspector stats, 4-skill moveset & defensive type matchups
+    const computedBlastoise = computeComputedStats(blastoise, ivs, 50, false);
+    assert.ok(computedBlastoise.combatPower > 0);
+    assert.equal(computedBlastoise.primaryMove.type, 'Water');
+    assert.equal(computedBlastoise.secondaryMove.type, 'Ice');
+    assert.equal(computedBlastoise.ultimateMove.cooldownTurns, 2);
+
+    const secHit = executeMove(combatA, combatB, 'secondary', () => 0.5);
+    assert.equal(secHit.hit, true);
+    assert.ok(secHit.damageDealt > 0);
+
+    const charMatchup = analyzeDefensiveMatchups(['Fire', 'Flying']);
+    const rockWeak = charMatchup.weaknesses.find((w) => w.type === 'Rock');
+    const grassResist = charMatchup.resistances.find((r) => r.type === 'Grass');
+    assert.equal(rockWeak?.mult, 4);
+    assert.equal(grassResist?.mult, 0.25);
+
+    // 6. Captcha threshold range [80..100]
     for (let i = 0; i < 30; i += 1) {
       const th = rollNextCaptchaThreshold();
       assert.ok(th >= 80 && th <= 100);

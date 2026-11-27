@@ -1,7 +1,9 @@
 import { Prisma } from '@prisma/client';
 import { getPrismaClient, withDbRetry } from '@/lib/prisma';
 import { BALL_CATALOG } from '../catalog/ball-catalog';
-import type { BallId, DailyRewardResult } from '../types';
+import { defaultCreatureCatalog } from '../catalog/creature-catalog';
+import rawEvolutionsData from '../data/evolutions.json';
+import type { BallId, CreatureIVs, CreatureSpecies, DailyRewardResult } from '../types';
 
 export interface TrainerIdentityInput {
   readonly userId: string;
@@ -87,6 +89,83 @@ export type ToggleFavoriteResult =
       readonly ok: false;
       readonly message: string;
     };
+
+export interface InspectEvolutionBranch {
+  readonly toSpeciesId: number;
+  readonly toName: string;
+  readonly requiredLevel: number;
+}
+
+export interface OwnedCreatureInspectView {
+  readonly kind: 'OWNED';
+  readonly creatureId: string;
+  readonly shortId: string;
+  readonly boxIndex: number;
+  readonly totalOwned: number;
+  readonly species: CreatureSpecies;
+  readonly isShiny: boolean;
+  readonly isFavorite: boolean;
+  readonly isBuddy: boolean;
+  readonly inMarket: boolean;
+  readonly level: number;
+  readonly xp: number;
+  readonly nextLevelXp: number;
+  readonly ivs: CreatureIVs;
+  readonly ivTotal: number;
+  readonly ivPercent: number;
+  readonly ballUsed: BallId;
+  readonly caughtAt: Date;
+  readonly evolutions: readonly InspectEvolutionBranch[];
+  readonly hasMegaForm: boolean;
+}
+
+export interface PokedexSpeciesInspectView {
+  readonly kind: 'SPECIES_DEX';
+  readonly species: CreatureSpecies;
+  readonly referenceLevel: number;
+  readonly referenceIvs: CreatureIVs;
+  readonly evolutions: readonly InspectEvolutionBranch[];
+  readonly hasMegaForm: boolean;
+}
+
+export type CreatureInspectResult =
+  | OwnedCreatureInspectView
+  | PokedexSpeciesInspectView
+  | null;
+
+export type TrainCreatureOutcome =
+  | {
+      readonly ok: true;
+      readonly newLevel: number;
+      readonly levelsGained: number;
+      readonly totalCost: number;
+      readonly newCoinsBalance: number;
+    }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    };
+
+const INSPECT_MAX_LEVEL = 100;
+const INSPECT_TRAIN_COST = 400;
+const INSPECT_EVOLUTION_MAP: Readonly<Record<string, readonly InspectEvolutionBranch[]>> =
+  rawEvolutionsData as Record<string, readonly InspectEvolutionBranch[]>;
+
+function parseInspectIvs(jsonValue: Prisma.JsonValue): CreatureIVs {
+  if (typeof jsonValue === 'object' && jsonValue !== null && !Array.isArray(jsonValue)) {
+    const rec = jsonValue as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    return {
+      hp: num(rec['hp']),
+      atk: num(rec['atk']),
+      def: num(rec['def']),
+      spAtk: num(rec['spAtk']),
+      spDef: num(rec['spDef']),
+      spd: num(rec['spd']),
+    };
+  }
+  return { hp: 0, atk: 0, def: 0, spAtk: 0, spDef: 0, spd: 0 };
+}
 
 const STARTER_COINS = 2500;
 const STARTER_BALLS: Readonly<Record<BallId, number>> = {
@@ -633,6 +712,321 @@ export class TrainerService {
           coinsEarned,
           pokeballsEarned,
           greatballsEarned,
+          newCoinsBalance: updatedTrainer.coins,
+        };
+      }),
+    );
+  }
+
+  private buildOwnedInspectView(
+    row: {
+      readonly id: string;
+      readonly speciesId: number;
+      readonly isShiny: boolean;
+      readonly isFavorite: boolean;
+      readonly inMarket: boolean;
+      readonly level: number;
+      readonly xp: number;
+      readonly ivsJson: Prisma.JsonValue;
+      readonly ivTotal: number;
+      readonly ivPercent: number;
+      readonly ballUsed: string;
+      readonly caughtAt: Date;
+    },
+    boxIndex: number,
+    totalOwned: number,
+    buddyCreatureId: string | null,
+  ): OwnedCreatureInspectView | null {
+    const species = defaultCreatureCatalog.getById(row.speciesId);
+    if (!species) {
+      return null;
+    }
+    const megaSet = new Set(defaultCreatureCatalog.getMegaForms().map((m) => m.dexNumber));
+    const ballUsed: BallId = isBallId(row.ballUsed) ? row.ballUsed : 'pokeball';
+    return {
+      kind: 'OWNED',
+      creatureId: row.id,
+      shortId: row.id.slice(-6),
+      boxIndex,
+      totalOwned,
+      species,
+      isShiny: row.isShiny,
+      isFavorite: row.isFavorite,
+      isBuddy: buddyCreatureId === row.id,
+      inMarket: row.inMarket,
+      level: row.level,
+      xp: row.xp,
+      nextLevelXp: row.level >= INSPECT_MAX_LEVEL ? 0 : Math.max(50, row.level * 50),
+      ivs: parseInspectIvs(row.ivsJson),
+      ivTotal: row.ivTotal,
+      ivPercent: row.ivPercent,
+      ballUsed,
+      caughtAt: row.caughtAt,
+      evolutions: INSPECT_EVOLUTION_MAP[String(species.id)] ?? [],
+      hasMegaForm: megaSet.has(species.dexNumber),
+    };
+  }
+
+  private buildSpeciesDexInspectView(species: CreatureSpecies): PokedexSpeciesInspectView {
+    const megaSet = new Set(defaultCreatureCatalog.getMegaForms().map((m) => m.dexNumber));
+    return {
+      kind: 'SPECIES_DEX',
+      species,
+      referenceLevel: 50,
+      referenceIvs: { hp: 15, atk: 15, def: 15, spAtk: 15, spDef: 15, spd: 15 },
+      evolutions: INSPECT_EVOLUTION_MAP[String(species.id)] ?? [],
+      hasMegaForm: megaSet.has(species.dexNumber),
+    };
+  }
+
+  public async inspectCreature(
+    userId: string,
+    rawQuery?: string,
+  ): Promise<CreatureInspectResult> {
+    const prisma = getPrismaClient();
+    const [trainer, box] = await withDbRetry(() =>
+      Promise.all([
+        prisma.trainer.findUnique({
+          where: { userId },
+          select: { buddyCreatureId: true },
+        }),
+        prisma.caughtCreature.findMany({
+          where: { userId, released: false },
+          orderBy: [{ caughtAt: 'desc' }],
+        }),
+      ]),
+    );
+
+    const buddyId = trainer?.buddyCreatureId ?? null;
+    const clean = rawQuery?.trim() ?? '';
+
+    if (!clean) {
+      if (box.length === 0) {
+        const starterRef = defaultCreatureCatalog.getById(25);
+        return starterRef ? this.buildSpeciesDexInspectView(starterRef) : null;
+      }
+      const buddyIdx = buddyId ? box.findIndex((c) => c.id === buddyId) : -1;
+      const targetIdx = buddyIdx >= 0 ? buddyIdx : 0;
+      const picked = box[targetIdx];
+      return picked
+        ? this.buildOwnedInspectView(picked, targetIdx + 1, box.length, buddyId)
+        : null;
+    }
+
+    const noHash = clean.replace(/^#/, '');
+
+    // 1) Số nguyên: khớp số thứ tự trong kho (;d) nếu hợp lệ, nếu lớn hơn thì tìm theo Dex ID
+    if (/^\d+$/.test(noHash)) {
+      const num = Number.parseInt(noHash, 10);
+      if (num >= 1 && num <= box.length && !clean.startsWith('#')) {
+        const picked = box[num - 1];
+        if (picked) {
+          return this.buildOwnedInspectView(picked, num, box.length, buddyId);
+        }
+      }
+      const ownedByDex = box.findIndex((c) => c.speciesId === num);
+      if (ownedByDex >= 0) {
+        return this.buildOwnedInspectView(
+          box[ownedByDex]!,
+          ownedByDex + 1,
+          box.length,
+          buddyId,
+        );
+      }
+      const catalogByNum = defaultCreatureCatalog.getById(num);
+      if (catalogByNum) {
+        return this.buildSpeciesDexInspectView(catalogByNum);
+      }
+    }
+
+    // 2) Khớp mã ngắn (#abc123) hoặc full ID
+    const idIdx = box.findIndex((c) => c.id === noHash || c.id.endsWith(noHash));
+    if (idIdx >= 0) {
+      return this.buildOwnedInspectView(box[idIdx]!, idIdx + 1, box.length, buddyId);
+    }
+
+    // 3) Khớp tên Pokémon trong kho (ưu tiên Buddy -> Shiny -> Level -> IV)
+    const lowerQ = clean.toLowerCase();
+    const matchingBoxIndices = box
+      .map((c, idx) => ({ c, idx }))
+      .filter((entry) => entry.c.speciesName.toLowerCase().includes(lowerQ));
+
+    if (matchingBoxIndices.length > 0) {
+      matchingBoxIndices.sort((a, b) => {
+        const aExact = a.c.speciesName.toLowerCase() === lowerQ ? 1 : 0;
+        const bExact = b.c.speciesName.toLowerCase() === lowerQ ? 1 : 0;
+        if (aExact !== bExact) return bExact - aExact;
+        const aBuddy = a.c.id === buddyId ? 1 : 0;
+        const bBuddy = b.c.id === buddyId ? 1 : 0;
+        if (aBuddy !== bBuddy) return bBuddy - aBuddy;
+        if (a.c.isShiny !== b.c.isShiny) return Number(b.c.isShiny) - Number(a.c.isShiny);
+        if (a.c.level !== b.c.level) return b.c.level - a.c.level;
+        return b.c.ivTotal - a.c.ivTotal;
+      });
+      const best = matchingBoxIndices[0]!;
+      return this.buildOwnedInspectView(best.c, best.idx + 1, box.length, buddyId);
+    }
+
+    // 4) Fallback tra cứu Pokédex toàn cầu (1,225 loài kể cả Mega/Gmax/Regional)
+    const catalogMatches = defaultCreatureCatalog.search(clean);
+    if (catalogMatches.length > 0) {
+      const exactCatalog =
+        catalogMatches.find((s) => s.name.toLowerCase() === lowerQ) ?? catalogMatches[0]!;
+      return this.buildSpeciesDexInspectView(exactCatalog);
+    }
+
+    return null;
+  }
+
+  public async inspectOwnedByOffset(
+    userId: string,
+    offsetIndex: number,
+  ): Promise<OwnedCreatureInspectView | null> {
+    const prisma = getPrismaClient();
+    const [trainer, box] = await withDbRetry(() =>
+      Promise.all([
+        prisma.trainer.findUnique({
+          where: { userId },
+          select: { buddyCreatureId: true },
+        }),
+        prisma.caughtCreature.findMany({
+          where: { userId, released: false },
+          orderBy: [{ caughtAt: 'desc' }],
+        }),
+      ]),
+    );
+
+    if (box.length === 0) {
+      return null;
+    }
+    const clamped = Math.max(0, Math.min(box.length - 1, offsetIndex));
+    const picked = box[clamped];
+    if (!picked) {
+      return null;
+    }
+    return this.buildOwnedInspectView(
+      picked,
+      clamped + 1,
+      box.length,
+      trainer?.buddyCreatureId ?? null,
+    );
+  }
+
+  public async inspectCreatureById(
+    userId: string,
+    creatureId: string,
+  ): Promise<OwnedCreatureInspectView | null> {
+    const prisma = getPrismaClient();
+    const [trainer, box] = await withDbRetry(() =>
+      Promise.all([
+        prisma.trainer.findUnique({
+          where: { userId },
+          select: { buddyCreatureId: true },
+        }),
+        prisma.caughtCreature.findMany({
+          where: { userId, released: false },
+          orderBy: [{ caughtAt: 'desc' }],
+        }),
+      ]),
+    );
+
+    const idx = box.findIndex((c) => c.id === creatureId);
+    if (idx < 0) {
+      return null;
+    }
+    return this.buildOwnedInspectView(
+      box[idx]!,
+      idx + 1,
+      box.length,
+      trainer?.buddyCreatureId ?? null,
+    );
+  }
+
+  public async trainSpecificCreature(
+    userMeta: TrainerIdentityInput,
+    creatureId: string,
+    levelsToGain: number,
+    idempotencyKey: string,
+  ): Promise<TrainCreatureOutcome> {
+    if (!Number.isInteger(levelsToGain) || levelsToGain < 1 || levelsToGain > 50) {
+      return { ok: false, message: 'Số cấp huấn luyện phải từ **1** đến **50**.' };
+    }
+    await this.ensureTrainer(userMeta);
+    const prisma = getPrismaClient();
+
+    return withDbRetry(() =>
+      prisma.$transaction(async (tx) => {
+        const existingTx = await tx.economyTransaction.findUnique({
+          where: { idempotencyKey },
+        });
+        const trainer = await tx.trainer.findUniqueOrThrow({
+          where: { userId: userMeta.userId },
+        });
+        const creature = await tx.caughtCreature.findFirst({
+          where: { id: creatureId, userId: userMeta.userId, released: false, inMarket: false },
+        });
+
+        if (!creature) {
+          return { ok: false, message: 'Không tìm thấy Pokémon khả dụng để huấn luyện.' };
+        }
+        if (existingTx) {
+          return {
+            ok: true,
+            newLevel: creature.level,
+            levelsGained: levelsToGain,
+            totalCost: Math.abs(existingTx.coinsDelta),
+            newCoinsBalance: trainer.coins,
+          };
+        }
+        if (creature.level >= INSPECT_MAX_LEVEL) {
+          return {
+            ok: false,
+            message: `**${creature.speciesName}** đã đạt cấp tối đa (**Lv.${INSPECT_MAX_LEVEL}**)!`,
+          };
+        }
+
+        const actualLevels = Math.min(levelsToGain, INSPECT_MAX_LEVEL - creature.level);
+        const totalCost = actualLevels * INSPECT_TRAIN_COST;
+        const spent = await tx.trainer.updateMany({
+          where: { userId: userMeta.userId, coins: { gte: totalCost } },
+          data: { coins: { decrement: totalCost } },
+        });
+
+        if (spent.count === 0) {
+          return {
+            ok: false,
+            message: `Cần **${totalCost.toLocaleString('en-US')} PC** để tăng cấp (bạn có **${trainer.coins.toLocaleString('en-US')} PC**).`,
+          };
+        }
+
+        const updatedCreature = await tx.caughtCreature.update({
+          where: { id: creature.id },
+          data: { level: creature.level + actualLevels, xp: 0 },
+        });
+        const updatedTrainer = await tx.trainer.findUniqueOrThrow({
+          where: { userId: userMeta.userId },
+        });
+
+        const meta: Prisma.InputJsonObject = {
+          creatureId: creature.id,
+          speciesName: creature.speciesName,
+          levelsGained: actualLevels,
+        };
+        await tx.economyTransaction.create({
+          data: {
+            idempotencyKey,
+            userId: userMeta.userId,
+            type: 'CREATURE_TRAIN',
+            coinsDelta: -totalCost,
+            metadata: meta,
+          },
+        });
+
+        return {
+          ok: true,
+          newLevel: updatedCreature.level,
+          levelsGained: actualLevels,
+          totalCost,
           newCoinsBalance: updatedTrainer.coins,
         };
       }),

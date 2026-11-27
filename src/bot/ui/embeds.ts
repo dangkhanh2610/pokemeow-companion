@@ -679,6 +679,7 @@ export function buildHelpEmbed(prefix: string, botName: string): EmbedBuilder {
           `• \`${prefix}p\` / \`/p\` — Tìm & bắt Pokémon hoang dã`,
           `• \`${prefix}f\` / \`/f\` — Câu cá hệ Nước & Shiny (\`${prefix}f shop\` mua cần/mồi)`,
           `• \`${prefix}bd\` / \`/buddy\` — Chọn & luyện Buddy (+4% bắt, +15% XP)`,
+          `• \`${prefix}info [tên|số|#mã]\` / \`${prefix}v\` / \`/info\` — Xem chỉ số, IV & 4 skill Pokémon`,
           `• \`${prefix}ev\` / \`/evolve\` — Tiến hóa Pokémon khi đủ cấp độ`,
           `• \`${prefix}d [lọc]\` / \`${prefix}fav [#mã]\` — Xem Pokédex & khóa yêu thích`,
           `• \`${prefix}m [tên]\` / \`/mega\` — Nghi thức hiến tế 5/6 Legend lên Mega`,
