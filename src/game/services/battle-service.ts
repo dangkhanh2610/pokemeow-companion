@@ -876,7 +876,7 @@ export class BattleService {
 
         let coinsEarned = 400 + session.fighterB.level * 25;
         let trainerXpEarned = 75 + session.fighterB.level * 4;
-        const buddyXpEarned = session.mode === 'GYM' ? 55 : 40;
+        let buddyXpEarned = 45 + session.fighterB.level * 7;
         let firstClearBadgeName: string | undefined;
         let bonusBallId: BallId | undefined;
         let bonusBallQty: number | undefined;
@@ -888,6 +888,7 @@ export class BattleService {
             nextBadges.push(session.gymSpec.badgeId);
             coinsEarned = session.gymSpec.rewardCoins;
             trainerXpEarned = 180 + session.gymSpec.stage * 70;
+            buddyXpEarned = 120 + session.gymSpec.stage * 45;
             firstClearBadgeName = session.gymSpec.badgeName;
             bonusBallId = session.gymSpec.rewardBall;
             bonusBallQty = session.gymSpec.rewardQty;
@@ -906,10 +907,12 @@ export class BattleService {
           } else {
             coinsEarned = Math.round(session.gymSpec.rewardCoins * 0.25);
             trainerXpEarned = 100 + session.gymSpec.stage * 20;
+            buddyXpEarned = 55 + session.fighterB.level * 5;
           }
         } else if (session.mode === 'PVP') {
           coinsEarned = 800;
           trainerXpEarned = 120;
+          buddyXpEarned = 160;
         }
 
         const xpNext = applyXp(trainer.xp, trainer.level, trainerXpEarned);

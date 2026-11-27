@@ -15,7 +15,16 @@ import {
 } from '../engine/battle-engine';
 import { CHALLENGER_ROSTER } from '../services/battle-service';
 import { CatchStrategyRegistry } from '../engine/catch-strategy';
-import { applyXp, computeIvSummary, SHINY_CHANCE, SpawnEngine, xpForNextLevel } from '../engine/spawn-engine';
+import {
+  applyXp,
+  calculateBuddyCatchXp,
+  computeIvSummary,
+  creatureXpNeeded,
+  MAX_CREATURE_LEVEL,
+  SHINY_CHANCE,
+  SpawnEngine,
+  xpForNextLevel,
+} from '../engine/spawn-engine';
 import { rollNextCaptchaThreshold } from '../services/captcha-service';
 import { ENCOUNTER_NETWORK_GRACE_MS, ENCOUNTER_TTL_MS } from '../services/encounter-service';
 import { addCreatureXp, getEvolutionBranches } from '../services/evolution-service';
@@ -266,6 +275,38 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.equal(xpRes.level, 2);
     assert.equal(xpRes.xp, 10);
     assert.equal(xpRes.leveledUp, true);
+    assert.equal(xpRes.levelsGained, 1);
+
+    // Progressive Creature XP Curve: strictly increasing XP needed per level
+    assert.equal(creatureXpNeeded(1), 50);
+    for (let lv = 1; lv < MAX_CREATURE_LEVEL; lv += 1) {
+      assert.ok(
+        creatureXpNeeded(lv + 1) > creatureXpNeeded(lv),
+        `XP cần cho Lv.${lv + 1} phải lớn hơn Lv.${lv}`,
+      );
+    }
+
+    // Buddy Catch XP scales with Rarity, Shiny & Fishing
+    const xpCommon = calculateBuddyCatchXp('common', false, 'wild');
+    const xpUncommon = calculateBuddyCatchXp('uncommon', false, 'wild');
+    const xpRare = calculateBuddyCatchXp('rare', false, 'wild');
+    const xpSuperRare = calculateBuddyCatchXp('super_rare', false, 'wild');
+    const xpLegendary = calculateBuddyCatchXp('legendary', false, 'wild');
+    const xpShinyCommon = calculateBuddyCatchXp('common', true, 'wild');
+    const xpFishingRare = calculateBuddyCatchXp('rare', false, 'fishing');
+
+    assert.ok(xpCommon < xpUncommon);
+    assert.ok(xpUncommon < xpRare);
+    assert.ok(xpRare < xpSuperRare);
+    assert.ok(xpSuperRare < xpLegendary);
+    assert.ok(xpShinyCommon >= 600);
+    assert.ok(xpFishingRare > xpRare);
+
+    // Catching a Legendary (+1000 XP) levels a Lv.1 Buddy up multiple levels with leftover XP
+    const multiJump = addCreatureXp(0, 1, xpLegendary);
+    assert.ok(multiJump.levelsGained >= 6);
+    assert.equal(multiJump.leveledUp, true);
+    assert.ok(multiJump.xp < creatureXpNeeded(multiJump.level));
 
     // 2. Fishing catalog & Water pools
     assert.equal(ROD_CATALOG.length, 4);

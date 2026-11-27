@@ -20,7 +20,7 @@ import type {
   ThrowBallOutcome,
 } from '../types';
 import { captchaService, type CaptchaView } from './captcha-service';
-import { addCreatureXp } from './evolution-service';
+import { awardBuddyCatchXpInTx } from './evolution-service';
 import { questService } from './quest-service';
 import {
   emptyBallInventory,
@@ -444,7 +444,14 @@ export class FishingService {
                 released: false,
                 inMarket: false,
               },
-              select: { id: true, xp: true, level: true },
+              select: {
+                id: true,
+                speciesId: true,
+                speciesName: true,
+                isShiny: true,
+                xp: true,
+                level: true,
+              },
             })
           : null;
 
@@ -493,13 +500,15 @@ export class FishingService {
             },
           });
 
-          if (buddy) {
-            const nextBuddyXp = addCreatureXp(buddy.xp, buddy.level, 25);
-            await tx.caughtCreature.update({
-              where: { id: buddy.id },
-              data: { xp: nextBuddyXp.xp, level: nextBuddyXp.level },
-            });
-          }
+          const buddyXpSummary = buddy
+            ? await awardBuddyCatchXpInTx(
+                tx,
+                buddy,
+                species.rarity,
+                enc.isShiny,
+                'fishing',
+              )
+            : undefined;
 
           const updatedTrainer = await tx.trainer.update({
             where: { userId },
@@ -559,6 +568,7 @@ export class FishingService {
             newLevel: updatedTrainer.level,
             leveledUp: xpNext.leveledUp,
             newCoinsBalance: updatedTrainer.coins,
+            buddyXp: buddyXpSummary,
             remainingBalls,
           };
         }

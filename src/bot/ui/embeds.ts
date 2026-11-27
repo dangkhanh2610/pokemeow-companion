@@ -367,6 +367,30 @@ export function buildCatchResultEmbed(
           value: `${coinIcon} **+${formatNumber(outcome.coinsEarned)} PC**\n**+${outcome.xpEarned} XP** · Tỉ lệ **${chancePct}%**`,
           inline: true,
         },
+        ...(outcome.buddyXp
+          ? [
+              {
+                name: 'Buddy Đồng Hành',
+                value: (() => {
+                  const b = outcome.buddyXp;
+                  const bShiny = b.isShiny ? `${botEmojiRegistry.getShinyMention()} ` : '';
+                  const xpText =
+                    b.xpGained > 0 ? `**+${formatNumber(b.xpGained)} XP**` : '**MAX**';
+                  const barText =
+                    b.nextLevelXp > 0
+                      ? `${formatNumber(b.newXp)}/${formatNumber(b.nextLevelXp)} XP`
+                      : 'MAX';
+                  const lvUp =
+                    b.levelsGained > 0
+                      ? `\n${checkIcon} **TĂNG CẤP! (+${b.levelsGained} → Lv.${b.newLevel})**`
+                      : '';
+                  const evoTip = b.canEvolve ? ' · *Đủ cấp tiến hóa (`;ev`)*' : '';
+                  return `${bShiny}**${b.buddyName}** (${xpText}) — \`Lv.${b.newLevel}\` (${barText})${lvUp}${evoTip}`;
+                })(),
+                inline: false,
+              },
+            ]
+          : []),
       )
       .setFooter({
         text: `PokeNyan  ·  Số dư ${formatNumber(outcome.newCoinsBalance)} PC  ·  Lv.${outcome.newLevel}`,

@@ -3,10 +3,20 @@ import { getPrismaClient, withDbRetry } from '@/lib/prisma';
 import { BALL_CATALOG } from '../catalog/ball-catalog';
 import { defaultCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-catalog';
 import { defaultCatchStrategyRegistry } from '../engine/catch-strategy';
-import { applyXp, computeIvSummary, defaultSpawnEngine } from '../engine/spawn-engine';
-import type { BallId, CreatureIVs, CreatureSpecies, EncounterRoll, ThrowBallOutcome } from '../types';
+import {
+  applyXp,
+  computeIvSummary,
+  defaultSpawnEngine,
+} from '../engine/spawn-engine';
+import type {
+  BallId,
+  CreatureIVs,
+  CreatureSpecies,
+  EncounterRoll,
+  ThrowBallOutcome,
+} from '../types';
 import { captchaService, type CaptchaView } from './captcha-service';
-import { addCreatureXp } from './evolution-service';
+import { awardBuddyCatchXpInTx } from './evolution-service';
 import { questService } from './quest-service';
 import {
   emptyBallInventory,
@@ -345,7 +355,14 @@ export class EncounterService {
                   released: false,
                   inMarket: false,
                 },
-                select: { id: true, xp: true, level: true },
+                select: {
+                  id: true,
+                  speciesId: true,
+                  speciesName: true,
+                  isShiny: true,
+                  xp: true,
+                  level: true,
+                },
               })
             : null;
 
@@ -393,13 +410,15 @@ export class EncounterService {
               },
             });
 
-            if (buddy) {
-              const nextBuddyXp = addCreatureXp(buddy.xp, buddy.level, 18);
-              await tx.caughtCreature.update({
-                where: { id: buddy.id },
-                data: { xp: nextBuddyXp.xp, level: nextBuddyXp.level },
-              });
-            }
+            const buddyXpSummary = buddy
+              ? await awardBuddyCatchXpInTx(
+                  tx,
+                  buddy,
+                  species.rarity,
+                  encounter.isShiny,
+                  'wild',
+                )
+              : undefined;
 
             const updatedTrainer = await tx.trainer.update({
               where: { userId },
@@ -455,6 +474,7 @@ export class EncounterService {
               newLevel: updatedTrainer.level,
               leveledUp: xpNext.leveledUp,
               newCoinsBalance: updatedTrainer.coins,
+              buddyXp: buddyXpSummary,
               remainingBalls,
             };
           }

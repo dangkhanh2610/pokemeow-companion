@@ -6,8 +6,65 @@ import {
 import type { CreatureIVs, CreatureSpecies, EncounterRoll, RarityTier } from '../types';
 
 export const SHINY_CHANCE = 1 / 8192;
+export const MAX_CREATURE_LEVEL = 100;
 const MAX_SINGLE_IV = 31;
 const MAX_TOTAL_IV = 186;
+
+export const BUDDY_CATCH_XP_BY_RARITY: Readonly<Record<RarityTier, number>> = {
+  common: 35,
+  uncommon: 65,
+  rare: 150,
+  super_rare: 360,
+  legendary: 1000,
+  mega: 1200,
+};
+
+export function calculateBuddyCatchXp(
+  rarity: RarityTier,
+  isShiny: boolean,
+  source: 'wild' | 'fishing' = 'wild',
+): number {
+  const base = BUDDY_CATCH_XP_BY_RARITY[rarity];
+  const withShiny = isShiny ? Math.max(600, Math.round(base * 2.5)) : base;
+  return source === 'fishing' ? Math.round(withShiny * 1.2) : withShiny;
+}
+
+export function creatureXpNeeded(level: number): number {
+  const clamped = Math.max(1, Math.min(MAX_CREATURE_LEVEL, Math.floor(level)));
+  const step = clamped - 1;
+  return Math.round(50 + 22 * step + 1.8 * step * step);
+}
+
+export function addCreatureXp(
+  currentXp: number,
+  currentLevel: number,
+  gainedXp: number,
+): {
+  readonly xp: number;
+  readonly level: number;
+  readonly leveledUp: boolean;
+  readonly levelsGained: number;
+} {
+  let xp = currentXp + Math.max(0, gainedXp);
+  const startLevel = Math.max(1, Math.min(MAX_CREATURE_LEVEL, currentLevel));
+  let level = startLevel;
+
+  while (level < MAX_CREATURE_LEVEL && xp >= creatureXpNeeded(level)) {
+    xp -= creatureXpNeeded(level);
+    level += 1;
+  }
+
+  if (level >= MAX_CREATURE_LEVEL) {
+    xp = 0;
+  }
+
+  return {
+    xp,
+    level,
+    leveledUp: level > startLevel,
+    levelsGained: level - startLevel,
+  };
+}
 
 const WILD_RARITY_ORDER: readonly RarityTier[] = [
   'common',

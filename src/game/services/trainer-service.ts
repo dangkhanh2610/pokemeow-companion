@@ -4,6 +4,7 @@ import { BALL_CATALOG } from '../catalog/ball-catalog';
 import { defaultCreatureCatalog } from '../catalog/creature-catalog';
 import { resolveEquippedMoves, type MoveSpec } from '../catalog/move-catalog';
 import rawEvolutionsData from '../data/evolutions.json';
+import { creatureXpNeeded, MAX_CREATURE_LEVEL } from '../engine/spawn-engine';
 
 export const OFFICIAL_GYM_BADGE_IDS: ReadonlySet<string> = new Set([
   'boulder',
@@ -1012,7 +1013,7 @@ export class TrainerService {
       inMarket: row.inMarket,
       level: row.level,
       xp: row.xp,
-      nextLevelXp: row.level >= INSPECT_MAX_LEVEL ? 0 : Math.max(50, row.level * 50),
+      nextLevelXp: row.level >= MAX_CREATURE_LEVEL ? 0 : creatureXpNeeded(row.level),
       ivs: parseInspectIvs(row.ivsJson),
       ivTotal: row.ivTotal,
       ivPercent: row.ivPercent,

@@ -10,6 +10,7 @@ import { getBallSpec } from '@/game/catalog/ball-catalog';
 import { RARITY_CONFIGS } from '@/game/catalog/creature-catalog';
 import { BAIT_CATALOG, ROD_CATALOG } from '@/game/catalog/fishing-catalog';
 import { getSpeciesMovePool, type MoveSpec } from '@/game/catalog/move-catalog';
+import { BUDDY_CATCH_XP_BY_RARITY } from '@/game/engine/spawn-engine';
 import {
   analyzeDefensiveMatchups,
   computeComputedStats,
@@ -238,6 +239,9 @@ export function buildBuddyEmbed(
 
   const coinIcon = botEmojiRegistry.getCoinMention();
   const tag = rarityTag(buddy.rarity, buddy.isShiny);
+  const xpRatio = buddy.nextLevelXp > 0 ? Math.min(1, buddy.xp / buddy.nextLevelXp) : 1;
+  const filledBlocks = Math.round(xpRatio * 10);
+  const xpBar = `${'▰'.repeat(filledBlocks)}${'▱'.repeat(10 - filledBlocks)}`;
   const evoText =
     buddy.evolutions.length > 0
       ? buddy.evolutions
@@ -248,17 +252,29 @@ export function buildBuddyEmbed(
           .join('\n')
       : '*Đã đạt cấp tiến hóa tối đa (hoặc không có dạng tiến hóa tiếp theo)*';
 
+  const rarityXpInfo = [
+    `Common **+${BUDDY_CATCH_XP_BY_RARITY.common}** · Uncommon **+${BUDDY_CATCH_XP_BY_RARITY.uncommon}** · Rare **+${BUDDY_CATCH_XP_BY_RARITY.rare}**`,
+    `Super Rare **+${BUDDY_CATCH_XP_BY_RARITY.super_rare}** · Legendary **+${formatNumber(BUDDY_CATCH_XP_BY_RARITY.legendary)}**`,
+    `Shiny **x2.5** (tối thiểu **+600 XP**) · Câu cá **+20% XP** · Mỗi cấp tăng lượng XP cần thiết`,
+  ].join('\n');
+
   const embed = new EmbedBuilder()
     .setColor(0x8b5cf6)
     .setTitle(`Buddy Đồng Hành · ${displayName}`)
     .setDescription(
       [
         `${tag ? `${tag} ` : ''}**${buddy.speciesName}** (\`#${buddy.id.slice(-6)}\`)`,
-        `Cấp độ: **Lv.${buddy.level}** (${buddy.nextLevelXp > 0 ? `XP: **${buddy.xp}/${buddy.nextLevelXp}**` : '**MAX**'}) · **${buddy.ivPercent}% IV**`,
-        `Hiệu ứng: **+4% tỉ lệ bắt** · **+15% XP Trainer** · Huấn luyện: \`${prefix}bd train [cấp]\` (${coinIcon} ${formatNumber(TRAIN_COST_PER_LEVEL)}/cấp)`,
+        `Cấp độ: **Lv.${buddy.level}** · **${buddy.ivPercent}% IV**`,
+        buddy.nextLevelXp > 0
+          ? `EXP: \`${xpBar}\` **${formatNumber(buddy.xp)} / ${formatNumber(buddy.nextLevelXp)}** (${Math.round(xpRatio * 100)}%)`
+          : `EXP: \`${xpBar}\` **Cấp Tối Đa (Lv.100)**`,
+        `Đặc quyền: **+4% tỉ lệ bắt** · **+15% XP Trainer** · Ra trận chính trong \`${prefix}bt\` & \`${prefix}gym\` · \`${prefix}bd train [cấp]\` (${coinIcon} ${formatNumber(TRAIN_COST_PER_LEVEL)}/cấp)`,
       ].join('\n'),
     )
-    .addFields({ name: 'Chuỗi Tiến Hóa', value: evoText, inline: false })
+    .addFields(
+      { name: 'Chuỗi Tiến Hóa', value: evoText, inline: false },
+      { name: 'XP Buddy Nhận Theo Rarity Khi Bắt Pokémon', value: rarityXpInfo, inline: false },
+    )
     .setFooter({ text: `Dùng ${prefix}ev ${buddy.speciesName.toLowerCase()} để tiến hóa khi đủ cấp` });
 
   if (buddy.spriteUrl) {

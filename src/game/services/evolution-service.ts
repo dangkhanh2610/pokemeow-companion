@@ -2,8 +2,23 @@ import { Prisma } from '@prisma/client';
 import { getPrismaClient, withDbRetry } from '@/lib/prisma';
 import { defaultCreatureCatalog } from '../catalog/creature-catalog';
 import rawEvolutionsData from '../data/evolutions.json';
-import type { CreatureSpecies } from '../types';
+import {
+  addCreatureXp,
+  BUDDY_CATCH_XP_BY_RARITY,
+  calculateBuddyCatchXp,
+  creatureXpNeeded,
+  MAX_CREATURE_LEVEL,
+} from '../engine/spawn-engine';
+import type { BuddyCatchXpSummary, CreatureSpecies, RarityTier } from '../types';
 import { trainerService, type TrainerIdentityInput } from './trainer-service';
+
+export {
+  addCreatureXp,
+  BUDDY_CATCH_XP_BY_RARITY,
+  calculateBuddyCatchXp,
+  creatureXpNeeded,
+  MAX_CREATURE_LEVEL,
+};
 
 export interface EvolutionBranch {
   readonly toSpeciesId: number;
@@ -64,7 +79,6 @@ export type EvolveOutcome =
     }
   | { readonly ok: false; readonly message: string };
 
-export const MAX_CREATURE_LEVEL = 100;
 export const TRAIN_COST_PER_LEVEL = 400;
 
 const EVOLUTION_MAP: Readonly<Record<string, readonly EvolutionBranch[]>> =
@@ -74,30 +88,54 @@ export function getEvolutionBranches(speciesId: number): readonly EvolutionBranc
   return EVOLUTION_MAP[String(speciesId)] ?? [];
 }
 
-export function creatureXpNeeded(level: number): number {
-  return Math.max(50, level * 50);
-}
-
-export function addCreatureXp(
-  currentXp: number,
-  currentLevel: number,
-  gainedXp: number,
-): { readonly xp: number; readonly level: number; readonly leveledUp: boolean } {
-  let xp = currentXp + Math.max(0, gainedXp);
-  let level = Math.max(1, Math.min(MAX_CREATURE_LEVEL, currentLevel));
-  let leveledUp = false;
-
-  while (level < MAX_CREATURE_LEVEL && xp >= creatureXpNeeded(level)) {
-    xp -= creatureXpNeeded(level);
-    level += 1;
-    leveledUp = true;
+export async function awardBuddyCatchXpInTx(
+  tx: Prisma.TransactionClient,
+  buddy: {
+    readonly id: string;
+    readonly speciesId: number;
+    readonly speciesName: string;
+    readonly isShiny: boolean;
+    readonly xp: number;
+    readonly level: number;
+  },
+  caughtRarity: RarityTier,
+  caughtIsShiny: boolean,
+  source: 'wild' | 'fishing',
+): Promise<BuddyCatchXpSummary> {
+  if (buddy.level >= MAX_CREATURE_LEVEL) {
+    return {
+      buddyName: buddy.speciesName,
+      isShiny: buddy.isShiny,
+      xpGained: 0,
+      newLevel: MAX_CREATURE_LEVEL,
+      newXp: 0,
+      nextLevelXp: 0,
+      levelsGained: 0,
+      canEvolve: false,
+    };
   }
 
-  if (level >= MAX_CREATURE_LEVEL) {
-    xp = 0;
-  }
+  const xpGained = calculateBuddyCatchXp(caughtRarity, caughtIsShiny, source);
+  const next = addCreatureXp(buddy.xp, buddy.level, xpGained);
+  await tx.caughtCreature.update({
+    where: { id: buddy.id },
+    data: { xp: next.xp, level: next.level },
+  });
 
-  return { xp, level, leveledUp };
+  const canEvolve =
+    next.leveledUp &&
+    getEvolutionBranches(buddy.speciesId).some((b) => next.level >= b.requiredLevel);
+
+  return {
+    buddyName: buddy.speciesName,
+    isShiny: buddy.isShiny,
+    xpGained,
+    newLevel: next.level,
+    newXp: next.xp,
+    nextLevelXp: next.level >= MAX_CREATURE_LEVEL ? 0 : creatureXpNeeded(next.level),
+    levelsGained: next.levelsGained,
+    canEvolve,
+  };
 }
 
 function toBuddyView(creature: {

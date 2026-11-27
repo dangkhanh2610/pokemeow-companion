@@ -78,6 +78,17 @@ export interface EncounterRoll {
   readonly ivPercent: number;
 }
 
+export interface BuddyCatchXpSummary {
+  readonly buddyName: string;
+  readonly isShiny: boolean;
+  readonly xpGained: number;
+  readonly newLevel: number;
+  readonly newXp: number;
+  readonly nextLevelXp: number;
+  readonly levelsGained: number;
+  readonly canEvolve: boolean;
+}
+
 export type ThrowBallOutcome =
   | {
       readonly ok: true;
@@ -94,6 +105,7 @@ export type ThrowBallOutcome =
       readonly newLevel: number;
       readonly leveledUp: boolean;
       readonly newCoinsBalance: number;
+      readonly buddyXp?: BuddyCatchXpSummary;
       readonly remainingBalls?: Readonly<Record<BallId, number>>;
     }
   | {
