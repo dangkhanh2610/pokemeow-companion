@@ -8,6 +8,8 @@ export type RodId = 'old_rod' | 'good_rod' | 'super_rod' | 'master_rod';
 
 export type BaitId = 'bait_lure' | 'bait_gold';
 
+export type FishingPackId = 'fish_ultra_pack' | 'fish_premier_pack';
+
 export type QuestPeriod = 'DAILY' | 'WEEKLY';
 
 export interface CreatureIVs {
@@ -105,6 +107,8 @@ export type ThrowBallOutcome =
       readonly newLevel: number;
       readonly leveledUp: boolean;
       readonly newCoinsBalance: number;
+      readonly fishingTokensEarned?: number;
+      readonly newFishingTokensBalance?: number;
       readonly buddyXp?: BuddyCatchXpSummary;
       readonly remainingBalls?: Readonly<Record<BallId, number>>;
     }

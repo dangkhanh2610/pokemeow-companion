@@ -269,22 +269,24 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
       sub.setName('cast').setDescription('Thả cần câu cá Pokémon hệ Nước'),
     )
     .addSubcommand((sub) =>
-      sub.setName('shop').setDescription('Xem cần câu (Good/Super/Master Rod) và mồi câu'),
+      sub
+        .setName('shop')
+        .setDescription('Mở shop câu cá: nâng cấp cần câu, mua mồi & đổi bóng bằng Fishing Tokens (FT)'),
     )
     .addSubcommand((sub) =>
       sub
         .setName('buy')
-        .setDescription('Mua cần câu mới hoặc mồi câu cá')
+        .setDescription('Mua cần câu, mồi câu hoặc đổi gói bóng bằng Fishing Tokens (FT)')
         .addStringOption((opt) =>
           opt
             .setName('item')
-            .setDescription('Mã vật phẩm: good, super, mrod, lure, gold')
+            .setDescription('Mã vật phẩm: good, super, mrod, lure, gold, ultrapack, premierpack')
             .setRequired(true),
         )
         .addIntegerOption((opt) =>
           opt
             .setName('quantity')
-            .setDescription('Số lượng mồi muốn mua (1 - 200)')
+            .setDescription('Số lượng mồi / gói bóng muốn mua (1 - 200)')
             .setRequired(false)
             .setMinValue(1)
             .setMaxValue(200),

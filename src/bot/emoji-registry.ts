@@ -55,9 +55,9 @@ const RARITY_KEYS: readonly (RarityTier | 'shiny')[] = [
   'shiny',
 ];
 
-export type UiIconKey = 'coin' | 'check' | 'cross' | 'timer' | 'fav';
+export type UiIconKey = 'coin' | 'check' | 'cross' | 'timer' | 'fav' | 'token';
 
-const UI_KEYS: readonly UiIconKey[] = ['coin', 'check', 'cross', 'timer', 'fav'];
+const UI_KEYS: readonly UiIconKey[] = ['coin', 'check', 'cross', 'timer', 'fav', 'token'];
 
 export type HpBarSlotKey =
   | 'l_g'
@@ -439,6 +439,10 @@ export class EmojiRegistry {
 
   public getFavMention(): string {
     return this.getUiMention('fav', '♥');
+  }
+
+  public getTokenMention(): string {
+    return this.getUiMention('token', 'FT');
   }
 }
 

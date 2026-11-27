@@ -1,11 +1,15 @@
 import { Prisma } from '@prisma/client';
 import { getPrismaClient, withDbRetry } from '@/lib/prisma';
 import {
+  calculateFishingTokens,
   getBaitSpec,
+  getFishingPackSpec,
   getRodSpec,
   getWaterPools,
   resolveBaitId,
+  resolveFishingPackId,
   resolveRodId,
+  ROD_CATALOG,
   type RodSpec,
 } from '../catalog/fishing-catalog';
 import { RARITY_CONFIGS, defaultCreatureCatalog } from '../catalog/creature-catalog';
@@ -82,17 +86,18 @@ export type PullHookOutcome =
 export type FishingGearStatus = {
   readonly rod: RodSpec;
   readonly coins: number;
+  readonly fishingTokens: number;
   readonly baits: Readonly<Record<BaitId, number>>;
 };
 
 export type BuyFishingItemOutcome =
   | {
       readonly ok: true;
-      readonly kind: 'ROD' | 'BAIT';
+      readonly kind: 'ROD' | 'BAIT' | 'PACK';
       readonly itemName: string;
       readonly quantityBought: number;
       readonly totalCost: number;
-      readonly newCoinsBalance: number;
+      readonly newFishingTokensBalance: number;
     }
   | {
       readonly ok: false;
@@ -179,6 +184,7 @@ export class FishingService {
         select: {
           coins: true,
           fishingRod: true,
+          fishingTokens: true,
           inventory: { select: { itemId: true, quantity: true } },
         },
       }),
@@ -194,6 +200,7 @@ export class FishingService {
     return {
       rod: getRodSpec(trainer.fishingRod),
       coins: trainer.coins,
+      fishingTokens: trainer.fishingTokens,
       baits,
     };
   }
@@ -533,6 +540,7 @@ export class FishingService {
           const coinsEarned = Math.round(
             (enc.isShiny ? species.baseReward * 3 : species.baseReward) * 1.2,
           );
+          const fishingTokensEarned = calculateFishingTokens(species.rarity, enc.isShiny);
           const rawXp = RARITY_CONFIGS[species.rarity].xpReward * (enc.isShiny ? 2 : 1);
           const xpEarned = Math.round(rawXp * (buddy ? 1.15 : 1));
           const xpNext = applyXp(trainer.xp, trainer.level, xpEarned);
@@ -576,6 +584,7 @@ export class FishingService {
             where: { userId },
             data: {
               coins: { increment: coinsEarned },
+              fishingTokens: { increment: fishingTokensEarned },
               xp: xpNext.xp,
               level: xpNext.level,
               totalCatches: { increment: 1 },
@@ -590,6 +599,7 @@ export class FishingService {
             rarity: species.rarity,
             isShiny: enc.isShiny,
             ballUsed: ballId,
+            fishingTokensEarned,
           };
 
           await tx.economyTransaction.create({
@@ -622,6 +632,8 @@ export class FishingService {
             newLevel: updatedTrainer.level,
             leveledUp: xpNext.leveledUp,
             newCoinsBalance: updatedTrainer.coins,
+            fishingTokensEarned,
+            newFishingTokensBalance: updatedTrainer.fishingTokens,
             buddyXp: buddyXpSummary,
             remainingBalls,
           };
@@ -691,11 +703,12 @@ export class FishingService {
     await trainerService.ensureTrainer(userMeta);
     const rodId = resolveRodId(rawItem);
     const baitId = resolveBaitId(rawItem);
+    const packId = resolveFishingPackId(rawItem);
 
-    if (!rodId && !baitId) {
+    if (!rodId && !baitId && !packId) {
       return {
         ok: false,
-        message: `Không tìm thấy cần câu hoặc mồi \`${rawItem}\`. Mã hợp lệ: \`good\`, \`super\`, \`mrod\`, \`lure\`, \`gold\` (hoặc \`2\`–\`6\`).`,
+        message: `Không tìm thấy vật phẩm câu cá \`${rawItem}\`. Mã hợp lệ: \`good\`, \`super\`, \`mrod\`, \`lure\`, \`gold\`, \`ultrapack\`, \`premierpack\` (hoặc \`2\`–\`8\`).`,
       };
     }
 
@@ -711,13 +724,16 @@ export class FishingService {
         });
 
         if (existingTx) {
+          const meta = (existingTx.metadata ?? {}) as Record<string, unknown>;
+          const recordedCost =
+            typeof meta['tokensCost'] === 'number' ? meta['tokensCost'] : 0;
           return {
             ok: true,
-            kind: rodId ? 'ROD' : 'BAIT',
+            kind: rodId ? 'ROD' : packId ? 'PACK' : 'BAIT',
             itemName: rawItem,
             quantityBought: rodId ? 1 : quantity,
-            totalCost: Math.abs(existingTx.coinsDelta),
-            newCoinsBalance: trainer.coins,
+            totalCost: recordedCost,
+            newFishingTokensBalance: trainer.fishingTokens,
           };
         }
 
@@ -730,16 +746,23 @@ export class FishingService {
               message: `Bạn đang dùng **${currentRod.name}** (Cấp ${currentRod.tier}) nên không thể mua lại **${targetRod.name}**!`,
             };
           }
+          if (targetRod.tier > currentRod.tier + 1) {
+            const prereq = ROD_CATALOG.find((r) => r.tier === targetRod.tier - 1);
+            return {
+              ok: false,
+              message: `Cần nâng cấp tuần tự! Bạn phải mua **${prereq?.name ?? 'cần cấp trước'}** trước khi mở khóa **${targetRod.name}**.`,
+            };
+          }
 
           const spent = await tx.trainer.updateMany({
-            where: { userId: userMeta.userId, coins: { gte: targetRod.price } },
-            data: { coins: { decrement: targetRod.price } },
+            where: { userId: userMeta.userId, fishingTokens: { gte: targetRod.price } },
+            data: { fishingTokens: { decrement: targetRod.price } },
           });
 
           if (spent.count === 0) {
             return {
               ok: false,
-              message: `Cần **${targetRod.price.toLocaleString('en-US')} PC** để mua **${targetRod.name}** (bạn có **${trainer.coins.toLocaleString('en-US')} PC**).`,
+              message: `Cần **${targetRod.price.toLocaleString('en-US')} FT** (Fishing Tokens) để nâng cấp **${targetRod.name}** (bạn hiện có **${trainer.fishingTokens.toLocaleString('en-US')} FT**). Hãy câu thêm bằng \`;f\` để kiếm FT!`,
             };
           }
 
@@ -748,13 +771,16 @@ export class FishingService {
             data: { fishingRod: targetRod.id },
           });
 
-          const meta: Prisma.InputJsonObject = { rodId: targetRod.id };
+          const meta: Prisma.InputJsonObject = {
+            rodId: targetRod.id,
+            tokensCost: targetRod.price,
+          };
           await tx.economyTransaction.create({
             data: {
               idempotencyKey,
               userId: userMeta.userId,
               type: 'FISHING_SHOP',
-              coinsDelta: -targetRod.price,
+              coinsDelta: 0,
               metadata: meta,
             },
           });
@@ -765,7 +791,62 @@ export class FishingService {
             itemName: targetRod.name,
             quantityBought: 1,
             totalCost: targetRod.price,
-            newCoinsBalance: updatedTrainer.coins,
+            newFishingTokensBalance: updatedTrainer.fishingTokens,
+          };
+        }
+
+        if (packId) {
+          if (!Number.isInteger(quantity) || quantity < 1 || quantity > 50) {
+            return { ok: false, message: 'Số lượng gói bóng đổi mỗi lần phải từ **1** đến **50**.' };
+          }
+          const pack = getFishingPackSpec(packId);
+          const totalCost = pack.price * quantity;
+          const spent = await tx.trainer.updateMany({
+            where: { userId: userMeta.userId, fishingTokens: { gte: totalCost } },
+            data: { fishingTokens: { decrement: totalCost } },
+          });
+
+          if (spent.count === 0) {
+            return {
+              ok: false,
+              message: `Không đủ Fishing Tokens! Đổi **${quantity}x ${pack.name}** cần **${totalCost.toLocaleString('en-US')} FT** (bạn có **${trainer.fishingTokens.toLocaleString('en-US')} FT**).`,
+            };
+          }
+
+          const ballsGranted = pack.rewardQty * quantity;
+          await tx.inventoryItem.upsert({
+            where: { userId_itemId: { userId: userMeta.userId, itemId: pack.rewardBall } },
+            update: { quantity: { increment: ballsGranted } },
+            create: { userId: userMeta.userId, itemId: pack.rewardBall, quantity: ballsGranted },
+          });
+
+          const updatedTrainer = await tx.trainer.findUniqueOrThrow({
+            where: { userId: userMeta.userId },
+          });
+
+          const meta: Prisma.InputJsonObject = {
+            packId: pack.id,
+            quantity,
+            ballsGranted,
+            tokensCost: totalCost,
+          };
+          await tx.economyTransaction.create({
+            data: {
+              idempotencyKey,
+              userId: userMeta.userId,
+              type: 'FISHING_SHOP',
+              coinsDelta: 0,
+              metadata: meta,
+            },
+          });
+
+          return {
+            ok: true,
+            kind: 'PACK',
+            itemName: `${pack.name} (+${ballsGranted} bóng)`,
+            quantityBought: quantity,
+            totalCost,
+            newFishingTokensBalance: updatedTrainer.fishingTokens,
           };
         }
 
@@ -777,14 +858,14 @@ export class FishingService {
         const bait = getBaitSpec(safeBaitId);
         const totalCost = bait.price * quantity;
         const spent = await tx.trainer.updateMany({
-          where: { userId: userMeta.userId, coins: { gte: totalCost } },
-          data: { coins: { decrement: totalCost } },
+          where: { userId: userMeta.userId, fishingTokens: { gte: totalCost } },
+          data: { fishingTokens: { decrement: totalCost } },
         });
 
         if (spent.count === 0) {
           return {
             ok: false,
-            message: `Không đủ PokéCoins! Mua **${quantity}x ${bait.name}** cần **${totalCost.toLocaleString('en-US')} PC** (bạn có **${trainer.coins.toLocaleString('en-US')} PC**).`,
+            message: `Không đủ Fishing Tokens! Mua **${quantity}x ${bait.name}** cần **${totalCost.toLocaleString('en-US')} FT** (bạn có **${trainer.fishingTokens.toLocaleString('en-US')} FT**).`,
           };
         }
 
@@ -798,13 +879,17 @@ export class FishingService {
           where: { userId: userMeta.userId },
         });
 
-        const meta: Prisma.InputJsonObject = { baitId: safeBaitId, quantity };
+        const meta: Prisma.InputJsonObject = {
+          baitId: safeBaitId,
+          quantity,
+          tokensCost: totalCost,
+        };
         await tx.economyTransaction.create({
           data: {
             idempotencyKey,
             userId: userMeta.userId,
             type: 'FISHING_SHOP',
-            coinsDelta: -totalCost,
+            coinsDelta: 0,
             metadata: meta,
           },
         });
@@ -815,7 +900,7 @@ export class FishingService {
           itemName: bait.name,
           quantityBought: quantity,
           totalCost,
-          newCoinsBalance: updatedTrainer.coins,
+          newFishingTokensBalance: updatedTrainer.fishingTokens,
         };
       }),
     );

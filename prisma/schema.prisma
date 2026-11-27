@@ -25,6 +25,7 @@ model Trainer {
   buddyCreatureId     String?
   teamCreatureIds     String[]             @default([])
   fishingRod          String               @default("old_rod")
+  fishingTokens       Int                  @default(0)
   lastFishAt          DateTime?
   gymBadges           String[]             @default([])
   battleWins          Int                  @default(0)

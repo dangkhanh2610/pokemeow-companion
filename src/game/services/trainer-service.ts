@@ -41,6 +41,7 @@ export interface TrainerBagSummary {
   readonly uniqueSpeciesCount: number;
   readonly activeCreatureCount: number;
   readonly fishingRod: string;
+  readonly fishingTokens: number;
   readonly gymBadges: readonly string[];
   readonly officialGymBadgeCount: number;
   readonly battleWins: number;
@@ -718,6 +719,7 @@ export class TrainerService {
       uniqueSpeciesCount: distinctSpecies.length,
       activeCreatureCount,
       fishingRod: trainer.fishingRod,
+      fishingTokens: trainer.fishingTokens,
       gymBadges: trainer.gymBadges,
       officialGymBadgeCount: trainer.gymBadges.filter((b) => OFFICIAL_GYM_BADGE_IDS.has(b)).length,
       battleWins: trainer.battleWins,

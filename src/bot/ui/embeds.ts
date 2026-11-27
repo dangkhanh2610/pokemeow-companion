@@ -369,7 +369,10 @@ export function buildCatchResultEmbed(
         },
         {
           name: 'Phần Thưởng',
-          value: `${coinIcon} **+${formatNumber(outcome.coinsEarned)} PC**\n**+${outcome.xpEarned} XP** · Tỉ lệ **${chancePct}%**`,
+          value: [
+            `${coinIcon} **+${formatNumber(outcome.coinsEarned)} PC**${outcome.fishingTokensEarned ? `  ·  ${botEmojiRegistry.getTokenMention()} **+${formatNumber(outcome.fishingTokensEarned)} FT**` : ''}`,
+            `**+${outcome.xpEarned} XP** · Tỉ lệ **${chancePct}%**`,
+          ].join('\n'),
           inline: true,
         },
         ...(outcome.buddyXp
@@ -398,7 +401,7 @@ export function buildCatchResultEmbed(
           : []),
       )
       .setFooter({
-        text: `PokeNyan  ·  Số dư ${formatNumber(outcome.newCoinsBalance)} PC  ·  Lv.${outcome.newLevel}`,
+        text: `PokeNyan  ·  Số dư ${formatNumber(outcome.newCoinsBalance)} PC${outcome.newFishingTokensBalance !== undefined ? `  ·  ${formatNumber(outcome.newFishingTokensBalance)} FT` : ''}  ·  Lv.${outcome.newLevel}`,
       });
 
     if (isHighlightTier) {
@@ -521,7 +524,7 @@ export function buildBagEmbed(summary: TrainerBagSummary, prefix = ';'): EmbedBu
     .addFields(
       {
         name: 'Tài Sản',
-        value: `${coinIcon} **${formatNumber(summary.coins)} PC**\nCấp độ: **Lv.${summary.level}** · Streak **${summary.dailyStreak}d**`,
+        value: `${coinIcon} **${formatNumber(summary.coins)} PC**  ·  ${botEmojiRegistry.getTokenMention()} **${formatNumber(summary.fishingTokens)} FT**\nCấp độ: **Lv.${summary.level}** · Streak **${summary.dailyStreak}d**`,
         inline: true,
       },
       {
@@ -579,7 +582,7 @@ export function buildProfileEmbed(summary: TrainerBagSummary): EmbedBuilder {
       },
       {
         name: 'Tài Sản & Chuỗi Ngày',
-        value: `${coinIcon} **${formatNumber(summary.coins)} PC**\nStreak: **${summary.dailyStreak} ngày**`,
+        value: `${coinIcon} **${formatNumber(summary.coins)} PC**  ·  ${botEmojiRegistry.getTokenMention()} **${formatNumber(summary.fishingTokens)} FT**\nStreak: **${summary.dailyStreak} ngày**`,
         inline: true,
       },
       {

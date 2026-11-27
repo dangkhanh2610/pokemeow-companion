@@ -9,7 +9,12 @@ import {
 } from 'discord.js';
 import { getBallSpec } from '@/game/catalog/ball-catalog';
 import { RARITY_CONFIGS } from '@/game/catalog/creature-catalog';
-import { BAIT_CATALOG, ROD_CATALOG } from '@/game/catalog/fishing-catalog';
+import {
+  BAIT_CATALOG,
+  FISHING_PACK_CATALOG,
+  FISHING_TOKEN_REWARDS,
+  ROD_CATALOG,
+} from '@/game/catalog/fishing-catalog';
 import { getSpeciesMovePool, type MoveSpec } from '@/game/catalog/move-catalog';
 import { BUDDY_CATCH_XP_BY_RARITY } from '@/game/engine/spawn-engine';
 import {
@@ -435,6 +440,7 @@ export function buildFishingBiteEmbed(
   pull: Extract<PullHookOutcome, { readonly ok: true }>,
 ): EmbedBuilder {
   const timerIcon = botEmojiRegistry.getTimerMention();
+  const tokenIcon = botEmojiRegistry.getTokenMention();
   const rarityBadge = botEmojiRegistry.getRarityMention(pull.species.rarity);
   const shinyIcon = pull.isShiny ? `${botEmojiRegistry.getShinyMention()} **SHINY** · ` : '';
   const expireEpoch = Math.ceil((pull.expiresAt.getTime() + 400) / 1000);
@@ -449,7 +455,7 @@ export function buildFishingBiteEmbed(
       [
         `**${displayName}** đã kéo lên một Pokémon hệ Nước bằng **${pull.rod.name}**!`,
         `${shinyIcon}${rarityBadge} **${RARITY_CONFIGS[pull.species.rarity].label}** · **${pull.ivPercent}% IV** (${pull.ivTotal}/186)`,
-        `${timerIcon} Bơi mất <t:${expireEpoch}:R> · Chọn Poké Ball để thu phục (+20% thưởng PC)!`,
+        `${timerIcon} Bơi mất <t:${expireEpoch}:R> · Chọn Poké Ball để nhận ${tokenIcon} **Fishing Tokens** & +20% PC!`,
       ].join('\n'),
     )
     .setImage(imageUrl);
@@ -463,34 +469,93 @@ export function buildFishingExpiredEmbed(displayName: string): EmbedBuilder {
     .setDescription(`${timerIcon} **${displayName}** chậm tay nên Pokémon Nước đã bơi mất. Gõ \`;f\` hoặc \`/f cast\` để thử lại!`);
 }
 
-export function buildFishingShopEmbed(gear: FishingGearStatus, prefix: string): EmbedBuilder {
-  const coinIcon = botEmojiRegistry.getCoinMention();
+export function buildFishingShopEmbed(
+  gear: FishingGearStatus,
+  prefix: string,
+  notice?: string,
+): EmbedBuilder {
+  const tokenIcon = botEmojiRegistry.getTokenMention();
   const checkIcon = botEmojiRegistry.getCheckMention();
 
   const rodLines = ROD_CATALOG.map((r) => {
     const owned = r.tier <= gear.rod.tier;
-    const tag = owned ? `${checkIcon} *Đã có*` : `${coinIcon} **${formatNumber(r.price)} PC**`;
+    const locked = r.tier > gear.rod.tier + 1;
+    const tag = owned
+      ? `${checkIcon} *Đã có*`
+      : locked
+        ? `${tokenIcon} **${formatNumber(r.price)} FT** · *(Cần nâng từ cấp trước)*`
+        : `${tokenIcon} **${formatNumber(r.price)} FT**`;
     return `\`[${r.shopIndex}]\` **${r.name}** (\`${r.shortCode}\`) — ${tag}\n└ ${r.description}`;
   });
 
   const baitLines = BAIT_CATALOG.map((b) => {
     const qty = gear.baits[b.id];
-    return `\`[${b.shopIndex}]\` **${b.name}** (\`${b.shortCode}\`) — ${coinIcon} **${formatNumber(b.price)} PC** · *Đang có: ${qty}*\n└ ${b.description}`;
+    return `\`[${b.shopIndex}]\` **${b.name}** (\`${b.shortCode}\`) — ${tokenIcon} **${formatNumber(b.price)} FT** · *Đang có: ${qty}*\n└ ${b.description}`;
   });
+
+  const packLines = FISHING_PACK_CATALOG.map((p) => {
+    const ballIcon = botEmojiRegistry.getBallMention(p.rewardBall);
+    return `\`[${p.shopIndex}]\` ${ballIcon} **${p.name}** (\`${p.shortCode}\`) — ${tokenIcon} **${formatNumber(p.price)} FT**\n└ ${p.description}`;
+  });
+
+  const descParts = [
+    `${tokenIcon} Fishing Tokens hiện có: **${formatNumber(gear.fishingTokens)} FT**  ·  Cần câu: **${gear.rod.name}**`,
+    `Thưởng FT khi câu trúng: Common **+${FISHING_TOKEN_REWARDS.common}** · Uncommon **+${FISHING_TOKEN_REWARDS.uncommon}** · Rare **+${FISHING_TOKEN_REWARDS.rare}** · Super Rare **+${FISHING_TOKEN_REWARDS.super_rare}** · Legend **+${FISHING_TOKEN_REWARDS.legendary}** · Shiny **x3** (min +50)`,
+    `Mua bằng menu dưới hoặc \`${prefix}f buy <mã> [sl]\` (vd: \`${prefix}f buy good\`, \`${prefix}f buy lure 5\`)`,
+    notice ? `\n${checkIcon} ${notice}` : '',
+  ].filter(Boolean);
 
   return new EmbedBuilder()
     .setColor(0x0ea5e9)
-    .setTitle('Cửa Hàng Dụng Cụ Câu Cá')
-    .setDescription(
-      [
-        `${coinIcon} Số dư hiện có: **${formatNumber(gear.coins)} PC** · Cần hiện tại: **${gear.rod.name}**`,
-        `Mua nhanh: \`${prefix}f buy <mã> [sl]\` (vd: \`${prefix}f buy good\` hoặc \`${prefix}f buy lure 5\`)`,
-      ].join('\n'),
-    )
+    .setTitle('Cửa Hàng Câu Cá · Fishing Token Shop')
+    .setDescription(descParts.join('\n'))
     .addFields(
-      { name: 'Cần Câu ([1] – [4])', value: rodLines.join('\n'), inline: false },
-      { name: 'Mồi Câu ([5] – [6])', value: baitLines.join('\n'), inline: false },
+      ...splitLinesIntoFields('Cần Câu Tuần Tự ([1] – [4])', rodLines),
+      ...splitLinesIntoFields('Mồi Câu ([5] – [6]) & Đổi Bóng ([7] – [8])', [
+        ...baitLines,
+        ...packLines,
+      ]),
+    )
+    .setFooter({ text: 'PokeNyan Fishing  ·  Đơn vị tiền riêng Fishing Tokens (FT) kiếm từ câu cá' });
+}
+
+export function buildFishingShopSelectRow(
+  ownerUserId: string,
+  gear: FishingGearStatus,
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`fshop:${ownerUserId}`)
+    .setPlaceholder('Chọn vật phẩm câu cá muốn mua bằng FT...');
+
+  const nextRod = ROD_CATALOG.find((r) => r.tier === gear.rod.tier + 1);
+  if (nextRod) {
+    menu.addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel(`[${nextRod.shopIndex}] Nâng cấp ${nextRod.name} · ${formatNumber(nextRod.price)} FT`)
+        .setValue(nextRod.shortCode)
+        .setDescription(nextRod.description.slice(0, 100)),
     );
+  }
+
+  for (const bait of BAIT_CATALOG) {
+    menu.addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel(`[${bait.shopIndex}] 1x ${bait.name} · ${formatNumber(bait.price)} FT`)
+        .setValue(bait.shortCode)
+        .setDescription(`Đang có ${gear.baits[bait.id]} · ${bait.description}`.slice(0, 100)),
+    );
+  }
+
+  for (const pack of FISHING_PACK_CATALOG) {
+    menu.addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel(`[${pack.shopIndex}] ${pack.name} · ${formatNumber(pack.price)} FT`)
+        .setValue(pack.shortCode)
+        .setDescription(pack.description.slice(0, 100)),
+    );
+  }
+
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
 }
 
 export function buildBuyFishingItemEmbed(
@@ -498,14 +563,14 @@ export function buildBuyFishingItemEmbed(
   res: Extract<BuyFishingItemOutcome, { readonly ok: true }>,
 ): EmbedBuilder {
   const checkIcon = botEmojiRegistry.getCheckMention();
-  const coinIcon = botEmojiRegistry.getCoinMention();
+  const tokenIcon = botEmojiRegistry.getTokenMention();
   return new EmbedBuilder()
     .setColor(0x10b981)
     .setTitle(`Mua Đồ Câu Thành Công · ${displayName}`)
     .setDescription(
       [
-        `${checkIcon} Đã mua **${res.quantityBought}x ${res.itemName}** (-${coinIcon} **${formatNumber(res.totalCost)} PC**)`,
-        `Số dư còn lại: ${coinIcon} **${formatNumber(res.newCoinsBalance)} PC**`,
+        `${checkIcon} Đã mua **${res.quantityBought}x ${res.itemName}** (-${tokenIcon} **${formatNumber(res.totalCost)} FT**)`,
+        `Fishing Tokens còn lại: ${tokenIcon} **${formatNumber(res.newFishingTokensBalance)} FT**`,
       ].join('\n'),
     );
 }

@@ -87,6 +87,7 @@ import {
   buildFishingExpiredEmbed,
   buildFishingPullRow,
   buildFishingShopEmbed,
+  buildFishingShopSelectRow,
   buildMarketBrowseEmbed,
   buildMarketBuyConfirmEmbed,
   buildMarketBuyConfirmRow,
@@ -782,7 +783,10 @@ export class BotCommandRouter {
         const sub = interaction.options.getSubcommand();
         if (sub === 'shop') {
           const gear = await fishingService.getFishingGear(meta);
-          await interaction.editReply({ embeds: [buildFishingShopEmbed(gear, activePrefix)] });
+          await interaction.editReply({
+            embeds: [buildFishingShopEmbed(gear, activePrefix)],
+            components: [buildFishingShopSelectRow(meta.userId, gear)],
+          });
           return;
         }
         if (sub === 'buy') {
@@ -1529,7 +1533,10 @@ export class BotCommandRouter {
         const sub = arg1?.toLowerCase();
         if (sub === 'shop' || sub === 's') {
           const gear = await fishingService.getFishingGear(meta);
-          await message.reply({ embeds: [buildFishingShopEmbed(gear, settings.prefix)] });
+          await message.reply({
+            embeds: [buildFishingShopEmbed(gear, settings.prefix)],
+            components: [buildFishingShopSelectRow(meta.userId, gear)],
+          });
           return;
         }
         if (sub === 'buy' || sub === 'b') {
@@ -2937,6 +2944,45 @@ export class BotCommandRouter {
           ),
         ],
         components: [buildMoveShopSelectRow(ownerId, buyRes.view)],
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith('fshop:')) {
+      await interaction.deferUpdate();
+      const parts = interaction.customId.split(':');
+      const ownerId = parts[1];
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.followUp({
+          content: `${crossIcon} Bạn không thể mua vật phẩm trên cửa hàng của người chơi khác!`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const itemCode = interaction.values[0] ?? '';
+      const meta = extractTrainerMeta(interaction.user);
+      const res = await fishingService.buyFishingItem(
+        meta,
+        itemCode,
+        1,
+        `sel-fbuy:${interaction.id}`,
+      );
+      if (!res.ok) {
+        await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+        return;
+      }
+
+      const gear = await fishingService.getFishingGear(meta);
+      await interaction.editReply({
+        embeds: [
+          buildFishingShopEmbed(
+            gear,
+            this.defaultPrefix,
+            `Đã mua **${res.quantityBought}x ${res.itemName}** (-**${res.totalCost.toLocaleString('en-US')} FT**)! Còn lại **${res.newFishingTokensBalance.toLocaleString('en-US')} FT**.`,
+          ),
+        ],
+        components: [buildFishingShopSelectRow(ownerId, gear)],
       });
     }
   }

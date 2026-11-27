@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { BALL_CATALOG, getBallSpec, resolveBallId } from '../catalog/ball-catalog';
 import { defaultCreatureCatalog, PokemonCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-catalog';
-import { getWaterPools, resolveBaitId, resolveRodId, ROD_CATALOG } from '../catalog/fishing-catalog';
+import {
+  calculateFishingTokens,
+  getWaterPools,
+  resolveBaitId,
+  resolveFishingPackId,
+  resolveRodId,
+  ROD_CATALOG,
+} from '../catalog/fishing-catalog';
 import { getSpeciesMovePool, resolveEquippedMoves } from '../catalog/move-catalog';
 import {
   analyzeDefensiveMatchups,
@@ -17,6 +24,7 @@ import { battleService, CHALLENGER_ROSTER } from '../services/battle-service';
 import { botEmojiRegistry } from '../../bot/emoji-registry';
 import {
   buildChallengerListEmbed,
+  buildFishingShopEmbed,
   buildMoveShopEmbed,
   buildTeamEmbed,
 } from '../../bot/ui/feature-embeds';
@@ -318,12 +326,22 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.equal(multiJump.leveledUp, true);
     assert.ok(multiJump.xp < creatureXpNeeded(multiJump.level));
 
-    // 2. Fishing catalog & Water pools
+    // 2. Fishing catalog, FT currency scaling & challenging rod progression
     assert.equal(ROD_CATALOG.length, 4);
     assert.equal(resolveRodId('good'), 'good_rod');
     assert.equal(resolveBaitId('lure'), 'bait_lure');
+    assert.equal(resolveFishingPackId('ultrapack'), 'fish_ultra_pack');
+    assert.equal(resolveFishingPackId('8'), 'fish_premier_pack');
     assert.ok(getWaterPools().common.length >= 20);
     assert.ok(getWaterPools().legendary.length >= 2);
+    assert.ok(ROD_CATALOG[0]!.price < ROD_CATALOG[1]!.price);
+    assert.ok(ROD_CATALOG[1]!.price < ROD_CATALOG[2]!.price);
+    assert.ok(ROD_CATALOG[2]!.price < ROD_CATALOG[3]!.price);
+    assert.equal(calculateFishingTokens('common', false), 1);
+    assert.ok(calculateFishingTokens('uncommon', false) < calculateFishingTokens('rare', false));
+    assert.ok(calculateFishingTokens('rare', false) < calculateFishingTokens('super_rare', false));
+    assert.ok(calculateFishingTokens('super_rare', false) < calculateFishingTokens('legendary', false));
+    assert.ok(calculateFishingTokens('common', true) >= 50);
 
     // 3. Buddy +4% catch bonus
     const registry = new CatchStrategyRegistry();
@@ -449,6 +467,7 @@ describe('PokéVerse RPG Core Engine', () => {
     const origType = botEmojiRegistry.getTypeMention.bind(botEmojiRegistry);
     const origShiny = botEmojiRegistry.getShinyMention.bind(botEmojiRegistry);
     const origFav = botEmojiRegistry.getFavMention.bind(botEmojiRegistry);
+    const origToken = botEmojiRegistry.getTokenMention.bind(botEmojiRegistry);
     try {
       botEmojiRegistry.getCheckMention = () => '<:pn_ui_check:1376543210987654321>';
       botEmojiRegistry.getCoinMention = () => '<:pn_ui_coin:1376543210987654322>';
@@ -456,6 +475,7 @@ describe('PokéVerse RPG Core Engine', () => {
       botEmojiRegistry.getTypeMention = (t) => `<:pn_type_${t.toLowerCase()}:1376543210987654324>`;
       botEmojiRegistry.getShinyMention = () => '<:pn_r3_shiny:1376543210987654325>';
       botEmojiRegistry.getFavMention = () => '<:pn_ui_fav:1376543210987654326>';
+      botEmojiRegistry.getTokenMention = () => '<:pn_ui_token:1376543210987654327>';
 
       const overview = battleService.getChallengerOverview([
         'boulder',
@@ -547,6 +567,19 @@ describe('PokéVerse RPG Core Engine', () => {
       for (const f of teamJson.fields ?? []) {
         assert.ok(f.value.length <= 1024, `Team field "${f.name}" exceeded 1024 chars: ${f.value.length}`);
       }
+
+      const fshopJson = buildFishingShopEmbed(
+        {
+          rod: ROD_CATALOG[0]!,
+          coins: 50000,
+          fishingTokens: 420,
+          baits: { bait_lure: 5, bait_gold: 2 },
+        },
+        ';',
+      ).toJSON();
+      for (const f of fshopJson.fields ?? []) {
+        assert.ok(f.value.length <= 1024, `FishingShop field "${f.name}" exceeded 1024 chars: ${f.value.length}`);
+      }
     } finally {
       botEmojiRegistry.getCheckMention = origCheck;
       botEmojiRegistry.getCoinMention = origCoin;
@@ -554,6 +587,7 @@ describe('PokéVerse RPG Core Engine', () => {
       botEmojiRegistry.getTypeMention = origType;
       botEmojiRegistry.getShinyMention = origShiny;
       botEmojiRegistry.getFavMention = origFav;
+      botEmojiRegistry.getTokenMention = origToken;
     }
 
     // 5. Inspector stats, 2 starter skills & defensive type matchups (with 0x immunities)
