@@ -492,7 +492,7 @@ export const SLASH_COMMANDS: readonly RESTPostAPIChatInputApplicationCommandsJSO
     .addStringOption((opt) =>
       opt
         .setName('answer')
-        .setDescription('Tên Pokémon trong hình (bỏ trống để xem lại câu hỏi)')
+        .setDescription('Mã 5 chữ số hiển thị trong ảnh Captcha (bỏ trống để xem lại ảnh)')
         .setRequired(false),
     )
     .toJSON(),

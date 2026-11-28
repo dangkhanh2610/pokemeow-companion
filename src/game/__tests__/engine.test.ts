@@ -23,6 +23,10 @@ import {
 import { battleService, CHALLENGER_ROSTER } from '../services/battle-service';
 import { botEmojiRegistry } from '../../bot/emoji-registry';
 import {
+  CAPTCHA_IMAGE_FILENAME,
+  renderCaptchaImage,
+} from '../../bot/ui/captcha-image';
+import {
   buildChallengerListEmbed,
   buildFishingShopEmbed,
   buildMoveShopEmbed,
@@ -32,6 +36,7 @@ import { CatchStrategyRegistry } from '../engine/catch-strategy';
 import {
   applyXp,
   calculateBuddyCatchXp,
+  calculateCatchCoins,
   computeIvSummary,
   creatureXpNeeded,
   MAX_CREATURE_LEVEL,
@@ -43,7 +48,11 @@ import {
   releaseEncounterLock,
   tryAcquireEncounterLock,
 } from '../services/activity-lock';
-import { rollNextCaptchaThreshold } from '../services/captcha-service';
+import {
+  CAPTCHA_CODE_LENGTH,
+  generateCaptchaCode,
+  rollNextCaptchaThreshold,
+} from '../services/captcha-service';
 import { ENCOUNTER_NETWORK_GRACE_MS, ENCOUNTER_TTL_MS } from '../services/encounter-service';
 import { addCreatureXp, getEvolutionBranches } from '../services/evolution-service';
 import { isChannelAllowed, validatePrefix } from '../services/guild-config-service';
@@ -697,5 +706,27 @@ describe('PokéVerse RPG Core Engine', () => {
 
     const byName = sortBoxCreatures(sampleBox, 'name').map((c) => c.id);
     assert.deepEqual(byName, ['c5', 'c2', 'c1', 'c3', 'c4']);
+  });
+
+  it('calculateCatchCoins tính đúng lượng PokéCoin tăng cường cho bắt hoang dã, câu cá và Shiny', () => {
+    assert.equal(calculateCatchCoins(120, false, 'wild'), 300);
+    assert.equal(calculateCatchCoins(120, true, 'wild'), 900);
+    assert.equal(calculateCatchCoins(120, false, 'fishing'), 360);
+    assert.equal(calculateCatchCoins(120, true, 'fishing'), 1080);
+    assert.equal(calculateCatchCoins(-10, false, 'wild'), 0);
+  });
+
+  it('Captcha số sinh đúng 5 chữ số và renderCaptchaImage tạo PNG hợp lệ', async () => {
+    for (let i = 0; i < 20; i += 1) {
+      const code = generateCaptchaCode();
+      assert.equal(code.length, CAPTCHA_CODE_LENGTH);
+      assert.match(code, /^\d{5}$/);
+    }
+
+    const attachment = await renderCaptchaImage('48291');
+    assert.equal(attachment.name, CAPTCHA_IMAGE_FILENAME);
+    assert.ok(Buffer.isBuffer(attachment.attachment));
+    const pngHeader = attachment.attachment.subarray(0, 4);
+    assert.deepEqual([...pngHeader], [0x89, 0x50, 0x4e, 0x47]);
   });
 });

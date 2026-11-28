@@ -1,22 +1,19 @@
 import { Prisma } from '@prisma/client';
 import { getPrismaClient, withDbRetry } from '@/lib/prisma';
-import { defaultCreatureCatalog } from '../catalog/creature-catalog';
 import { trainerService, type TrainerIdentityInput } from './trainer-service';
 
 const CAPTCHA_MIN_THRESHOLD = 80;
 const CAPTCHA_MAX_THRESHOLD = 100;
 const CAPTCHA_MAX_ATTEMPTS = 3;
 const CAPTCHA_PENALTY_MS = 5 * 60 * 1000;
-const CAPTCHA_REWARD_COINS = 300;
-const CAPTCHA_REWARD_BALLS = 1;
+export const CAPTCHA_CODE_LENGTH = 5;
+export const CAPTCHA_REWARD_COINS = 1000;
+export const CAPTCHA_REWARD_BALLS = 2;
 
 export interface CaptchaView {
   readonly userId: string;
-  readonly speciesId: number;
-  readonly speciesName: string;
-  readonly spriteUrl: string;
+  readonly code: string;
   readonly question: string;
-  readonly options: readonly string[];
   readonly attempts: number;
   readonly lockedUntil: Date | null;
 }
@@ -44,70 +41,44 @@ export type VerifyCaptchaOutcome =
       readonly penaltyUntil?: Date;
     };
 
-function parseOptionsJson(value: Prisma.JsonValue): readonly string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((item): item is string => typeof item === 'string');
+const NUMERIC_CODE_REGEX = new RegExp(`^\\d{${CAPTCHA_CODE_LENGTH}}$`);
+
+export function generateCaptchaCode(): string {
+  const min = 10 ** (CAPTCHA_CODE_LENGTH - 1);
+  const max = 10 ** CAPTCHA_CODE_LENGTH - 1;
+  return String(min + Math.floor(Math.random() * (max - min + 1)));
+}
+
+function isValidNumericCode(value: string): boolean {
+  return NUMERIC_CODE_REGEX.test(value);
 }
 
 function buildCaptchaChallengeData(): {
   readonly speciesId: number;
-  readonly speciesName: string;
   readonly question: string;
   readonly correctAnswer: string;
   readonly options: readonly string[];
 } {
-  const basePool = defaultCreatureCatalog.getAll().filter((s) => s.formType === 'base');
-  const target = basePool[Math.floor(Math.random() * basePool.length)] ?? basePool[0];
-  if (!target) {
-    throw new Error('Không tìm thấy dữ liệu Pokémon cho hệ thống Captcha.');
-  }
-
-  const decoys = new Set<string>();
-  let guard = 0;
-  while (decoys.size < 3 && guard < 100) {
-    guard += 1;
-    const candidate = basePool[Math.floor(Math.random() * basePool.length)];
-    if (candidate && candidate.id !== target.id && candidate.name !== target.name) {
-      decoys.add(candidate.name);
-    }
-  }
-
-  const options = [target.name, ...decoys];
-  for (let i = options.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const tmp = options[i]!;
-    options[i] = options[j]!;
-    options[j] = tmp;
-  }
-
+  const code = generateCaptchaCode();
   return {
-    speciesId: target.id,
-    speciesName: target.name,
-    question: 'Hệ thống chống tool tự động: Hãy chọn đúng tên Pokémon bên dưới để tiếp tục chơi!',
-    correctAnswer: target.name,
-    options,
+    speciesId: 0,
+    question: `Hệ thống chống tool tự động: Hãy nhập chính xác **${CAPTCHA_CODE_LENGTH} chữ số** hiển thị trong ảnh bên dưới để tiếp tục chơi!`,
+    correctAnswer: code,
+    options: [],
   };
 }
 
 function toCaptchaView(row: {
   readonly userId: string;
-  readonly speciesId: number;
   readonly question: string;
   readonly correctAnswer: string;
-  readonly optionsJson: Prisma.JsonValue;
   readonly attempts: number;
   readonly penaltyUntil: Date | null;
 }): CaptchaView {
-  const species = defaultCreatureCatalog.getById(row.speciesId);
   return {
     userId: row.userId,
-    speciesId: row.speciesId,
-    speciesName: row.correctAnswer,
-    spriteUrl: species?.artworkUrl ?? '',
+    code: row.correctAnswer,
     question: row.question,
-    options: parseOptionsJson(row.optionsJson),
     attempts: row.attempts,
     lockedUntil: row.penaltyUntil,
   };
@@ -124,7 +95,27 @@ export class CaptchaService {
     const row = await withDbRetry(() =>
       prisma.captchaChallenge.findUnique({ where: { userId } }),
     );
-    return row ? toCaptchaView(row) : null;
+    if (!row) {
+      return null;
+    }
+    if (!isValidNumericCode(row.correctAnswer)) {
+      const refreshed = buildCaptchaChallengeData();
+      const updated = await withDbRetry(() =>
+        prisma.captchaChallenge.update({
+          where: { userId },
+          data: {
+            speciesId: refreshed.speciesId,
+            question: refreshed.question,
+            correctAnswer: refreshed.correctAnswer,
+            optionsJson: [],
+            attempts: 0,
+            penaltyUntil: null,
+          },
+        }),
+      );
+      return toCaptchaView(updated);
+    }
+    return toCaptchaView(row);
   }
 
   public async checkSpawnGate(userId: string): Promise<CaptchaView | null> {
@@ -140,6 +131,23 @@ export class CaptchaService {
     );
 
     if (existing) {
+      if (!isValidNumericCode(existing.correctAnswer)) {
+        const refreshed = buildCaptchaChallengeData();
+        const updated = await withDbRetry(() =>
+          prisma.captchaChallenge.update({
+            where: { userId },
+            data: {
+              speciesId: refreshed.speciesId,
+              question: refreshed.question,
+              correctAnswer: refreshed.correctAnswer,
+              optionsJson: [],
+              attempts: 0,
+              penaltyUntil: null,
+            },
+          }),
+        );
+        return toCaptchaView(updated);
+      }
       return toCaptchaView(existing);
     }
 
@@ -223,16 +231,11 @@ export class CaptchaService {
           };
         }
 
-        const options = parseOptionsJson(challenge.optionsJson);
-        let chosen = trimmed;
-        if (/^[0-3]$/.test(trimmed)) {
-          const idx = Number.parseInt(trimmed, 10);
-          chosen = options[idx] ?? trimmed;
-        }
-
+        const normalized = trimmed.replace(/\s+/g, '');
         const isCorrect =
-          chosen.length > 0 &&
-          chosen.toLowerCase() === challenge.correctAnswer.toLowerCase();
+          isValidNumericCode(challenge.correctAnswer) &&
+          normalized.length === CAPTCHA_CODE_LENGTH &&
+          normalized === challenge.correctAnswer;
 
         if (isCorrect) {
           const nextThreshold = rollNextCaptchaThreshold();
@@ -260,7 +263,7 @@ export class CaptchaService {
           });
 
           const meta: Prisma.InputJsonObject = {
-            speciesId: challenge.speciesId,
+            mode: 'numeric',
             pokeball: CAPTCHA_REWARD_BALLS,
           };
 

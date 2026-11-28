@@ -22,6 +22,7 @@ export type BuyBallResult =
     };
 
 const RELEASE_BATCH_SIZE = 500;
+const RELEASE_DUPLICATE_COIN_RATIO = 0.85;
 
 export class EconomyService {
   public async buyBall(
@@ -212,7 +213,7 @@ export class EconomyService {
           }
 
           duplicateIds.push(creature.id);
-          coinsEarned += Math.round(species.baseReward * 0.3);
+          coinsEarned += Math.round(species.baseReward * RELEASE_DUPLICATE_COIN_RATIO);
         }
 
         if (duplicateIds.length === 0) {

@@ -1,8 +1,13 @@
 import {
+  ActionRowBuilder,
+  ModalBuilder,
   PermissionFlagsBits,
+  TextInputBuilder,
+  TextInputStyle,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Message,
+  type ModalSubmitInteraction,
   type PermissionsBitField,
   type StringSelectMenuInteraction,
   type User,
@@ -72,8 +77,7 @@ import {
   buildBuddyEmbed,
   buildBuddyTrainEmbed,
   buildBuyFishingItemEmbed,
-  buildCaptchaButtonsRow,
-  buildCaptchaEmbed,
+  buildCaptchaReplyPayload,
   buildCaptchaSuccessEmbed,
   buildChallengerListEmbed,
   buildChallengerSelectRow,
@@ -502,9 +506,11 @@ export class BotCommandRouter {
         const result = await encounterService.spawnWildEncounter(meta, interaction.channelId);
         if (!result.ok) {
           if (result.reason === 'CAPTCHA_REQUIRED' && result.captcha) {
+            const payload = await buildCaptchaReplyPayload(meta.displayName, result.captcha, '/');
             await interaction.editReply({
-              embeds: [buildCaptchaEmbed(meta.displayName, result.captcha)],
-              components: [buildCaptchaButtonsRow(result.captcha)],
+              embeds: payload.embeds,
+              components: payload.components,
+              files: payload.files,
             });
             return;
           }
@@ -808,9 +814,11 @@ export class BotCommandRouter {
         const cast = await fishingService.castRod(meta, interaction.channelId);
         if (!cast.ok) {
           if (cast.reason === 'CAPTCHA_REQUIRED' && cast.captcha) {
+            const payload = await buildCaptchaReplyPayload(meta.displayName, cast.captcha, '/');
             await interaction.editReply({
-              embeds: [buildCaptchaEmbed(meta.displayName, cast.captcha)],
-              components: [buildCaptchaButtonsRow(cast.captcha)],
+              embeds: payload.embeds,
+              components: payload.components,
+              files: payload.files,
             });
             return;
           }
@@ -1201,9 +1209,11 @@ export class BotCommandRouter {
             await interaction.editReply('Bạn hiện không có yêu cầu xác minh nào.');
             return;
           }
+          const payload = await buildCaptchaReplyPayload(meta.displayName, active, '/');
           await interaction.editReply({
-            embeds: [buildCaptchaEmbed(meta.displayName, active)],
-            components: [buildCaptchaButtonsRow(active)],
+            embeds: payload.embeds,
+            components: payload.components,
+            files: payload.files,
           });
           return;
         }
@@ -1220,12 +1230,18 @@ export class BotCommandRouter {
           await interaction.editReply({ embeds: [buildCaptchaSuccessEmbed(meta.displayName, res)] });
           return;
         }
+        const retryPayload = await buildCaptchaReplyPayload(
+          meta.displayName,
+          res.updatedChallenge,
+          '/',
+        );
         await interaction.editReply({
           content: res.penaltyUntil
             ? `${crossIcon} Sai 3 lần! Tài khoản bị tạm khóa 5 phút trước khi thử lại.`
             : `${crossIcon} Chưa chính xác! Bạn còn **${res.remainingAttempts}** lần thử.`,
-          embeds: [buildCaptchaEmbed(meta.displayName, res.updatedChallenge)],
-          components: [buildCaptchaButtonsRow(res.updatedChallenge)],
+          embeds: retryPayload.embeds,
+          components: retryPayload.components,
+          files: retryPayload.files,
         });
         return;
       }
@@ -1383,9 +1399,15 @@ export class BotCommandRouter {
         const result = await encounterService.spawnWildEncounter(meta, message.channelId);
         if (!result.ok) {
           if (result.reason === 'CAPTCHA_REQUIRED' && result.captcha) {
+            const payload = await buildCaptchaReplyPayload(
+              meta.displayName,
+              result.captcha,
+              settings.prefix,
+            );
             await message.reply({
-              embeds: [buildCaptchaEmbed(meta.displayName, result.captcha)],
-              components: [buildCaptchaButtonsRow(result.captcha)],
+              embeds: payload.embeds,
+              components: payload.components,
+              files: payload.files,
             });
             return;
           }
@@ -1563,9 +1585,15 @@ export class BotCommandRouter {
         const cast = await fishingService.castRod(meta, message.channelId);
         if (!cast.ok) {
           if (cast.reason === 'CAPTCHA_REQUIRED' && cast.captcha) {
+            const payload = await buildCaptchaReplyPayload(
+              meta.displayName,
+              cast.captcha,
+              settings.prefix,
+            );
             await message.reply({
-              embeds: [buildCaptchaEmbed(meta.displayName, cast.captcha)],
-              components: [buildCaptchaButtonsRow(cast.captcha)],
+              embeds: payload.embeds,
+              components: payload.components,
+              files: payload.files,
             });
             return;
           }
@@ -2114,9 +2142,11 @@ export class BotCommandRouter {
             await message.reply('Bạn hiện không có yêu cầu xác minh nào.');
             return;
           }
+          const payload = await buildCaptchaReplyPayload(meta.displayName, active, settings.prefix);
           await message.reply({
-            embeds: [buildCaptchaEmbed(meta.displayName, active)],
-            components: [buildCaptchaButtonsRow(active)],
+            embeds: payload.embeds,
+            components: payload.components,
+            files: payload.files,
           });
           return;
         }
@@ -2129,12 +2159,18 @@ export class BotCommandRouter {
           await message.reply({ embeds: [buildCaptchaSuccessEmbed(meta.displayName, res)] });
           return;
         }
+        const retryPayload = await buildCaptchaReplyPayload(
+          meta.displayName,
+          res.updatedChallenge,
+          settings.prefix,
+        );
         await message.reply({
           content: res.penaltyUntil
             ? `${crossIcon} Sai 3 lần! Tài khoản bị tạm khóa 5 phút trước khi thử lại.`
             : `${crossIcon} Chưa chính xác! Bạn còn **${res.remainingAttempts}** lần thử.`,
-          embeds: [buildCaptchaEmbed(meta.displayName, res.updatedChallenge)],
-          components: [buildCaptchaButtonsRow(res.updatedChallenge)],
+          embeds: retryPayload.embeds,
+          components: retryPayload.components,
+          files: retryPayload.files,
         });
         return;
       }
@@ -2330,37 +2366,50 @@ export class BotCommandRouter {
     }
 
     if (interaction.customId.startsWith('captcha:')) {
-      await interaction.deferUpdate();
       const parts = interaction.customId.split(':');
       const ownerId = parts[2];
-      const optIdx = parts[3] ?? '';
       if (!ownerId || ownerId !== interaction.user.id) {
-        await interaction.followUp({
+        await interaction.reply({
           content: `${crossIcon} Bạn không thể bấm xác minh thay người chơi khác!`,
           ephemeral: true,
         });
         return;
       }
-      const meta = extractTrainerMeta(interaction.user);
-      const res = await captchaService.verifyChallenge(meta, optIdx, `btn-cap:${interaction.id}`);
-      if (!res.ok) {
-        await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
-        return;
-      }
-      if (res.correct) {
-        await interaction.editReply({
-          embeds: [buildCaptchaSuccessEmbed(meta.displayName, res)],
-          components: [],
+
+      const active = await captchaService.getActiveChallenge(ownerId);
+      if (!active) {
+        await interaction.reply({
+          content: 'Bạn hiện không có yêu cầu xác minh nào.',
+          ephemeral: true,
         });
         return;
       }
-      await interaction.editReply({
-        content: res.penaltyUntil
-          ? `${crossIcon} Sai 3 lần! Tài khoản tạm khóa 5 phút trước khi thử lại.`
-          : `${crossIcon} Sai rồi! Còn **${res.remainingAttempts}** lần thử.`,
-        embeds: [buildCaptchaEmbed(meta.displayName, res.updatedChallenge)],
-        components: [buildCaptchaButtonsRow(res.updatedChallenge)],
-      });
+      if (active.lockedUntil && active.lockedUntil > new Date()) {
+        const sec = Math.ceil((active.lockedUntil.getTime() - Date.now()) / 1000);
+        await interaction.reply({
+          content: buildErrorNotice(
+            `Bạn đã nhập sai 3 lần nên bị tạm khóa xác minh trong **${sec} giây** nữa.`,
+          ),
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const codeInput = new TextInputBuilder()
+        .setCustomId('captcha_code')
+        .setLabel('Nhập 5 chữ số hiển thị trong ảnh')
+        .setPlaceholder('Ví dụ: 48291')
+        .setStyle(TextInputStyle.Short)
+        .setMinLength(5)
+        .setMaxLength(5)
+        .setRequired(true);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`captcha:submit:${ownerId}`)
+        .setTitle('Xác Minh Mã Số Captcha')
+        .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(codeInput));
+
+      await interaction.showModal(modal);
       return;
     }
 
@@ -2985,5 +3034,68 @@ export class BotCommandRouter {
         components: [buildFishingShopSelectRow(ownerId, gear)],
       });
     }
+  }
+
+  public async handleModalSubmitInteraction(
+    interaction: ModalSubmitInteraction,
+  ): Promise<void> {
+    if (!interaction.customId.startsWith('captcha:submit:')) {
+      return;
+    }
+
+    const crossIcon = botEmojiRegistry.getCrossMention();
+    const parts = interaction.customId.split(':');
+    const ownerId = parts[2];
+    if (!ownerId || ownerId !== interaction.user.id) {
+      await interaction.reply({
+        content: `${crossIcon} Bạn không thể gửi xác minh thay người chơi khác!`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const codeInput = interaction.fields.getTextInputValue('captcha_code').trim();
+    const meta = extractTrainerMeta(interaction.user);
+
+    if (interaction.isFromMessage()) {
+      await interaction.deferUpdate();
+    } else {
+      await interaction.deferReply();
+    }
+
+    const res = await captchaService.verifyChallenge(
+      meta,
+      codeInput,
+      `modal-cap:${interaction.id}`,
+    );
+
+    if (!res.ok) {
+      await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
+      return;
+    }
+
+    if (res.correct) {
+      await interaction.editReply({
+        content: null,
+        embeds: [buildCaptchaSuccessEmbed(meta.displayName, res)],
+        components: [],
+        files: [],
+      });
+      return;
+    }
+
+    const retryPayload = await buildCaptchaReplyPayload(
+      meta.displayName,
+      res.updatedChallenge,
+      this.defaultPrefix,
+    );
+    await interaction.editReply({
+      content: res.penaltyUntil
+        ? `${crossIcon} Sai 3 lần! Tài khoản tạm khóa 5 phút trước khi thử lại.`
+        : `${crossIcon} Sai rồi! Còn **${res.remainingAttempts}** lần thử.`,
+      embeds: retryPayload.embeds,
+      components: retryPayload.components,
+      files: retryPayload.files,
+    });
   }
 }

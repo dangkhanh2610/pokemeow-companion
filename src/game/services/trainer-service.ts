@@ -212,7 +212,9 @@ function parseInspectIvs(jsonValue: Prisma.JsonValue): CreatureIVs {
   return { hp: 0, atk: 0, def: 0, spAtk: 0, spDef: 0, spd: 0 };
 }
 
-const STARTER_COINS = 2500;
+const STARTER_COINS = 5000;
+const DAILY_POKEBALLS_REWARD = 5;
+const DAILY_GREATBALLS_REWARD = 2;
 const STARTER_BALLS: Readonly<Record<BallId, number>> = {
   pokeball: 10,
   greatball: 3,
@@ -876,8 +878,8 @@ export class TrainerService {
             ),
             streak: trainer.dailyStreak,
             coinsEarned: existingTx.coinsDelta,
-            pokeballsEarned: 3,
-            greatballsEarned: 1,
+            pokeballsEarned: DAILY_POKEBALLS_REWARD,
+            greatballsEarned: DAILY_GREATBALLS_REWARD,
             newCoinsBalance: trainer.coins,
           };
         }
@@ -903,9 +905,9 @@ export class TrainerService {
           trainer.lastDailyAt !== null &&
           now.getTime() - trainer.lastDailyAt.getTime() <= STREAK_GRACE_MS;
         const newStreak = keepStreak ? trainer.dailyStreak + 1 : 1;
-        const coinsEarned = 1000 + Math.min(newStreak, 10) * 200;
-        const pokeballsEarned = 3;
-        const greatballsEarned = 1;
+        const coinsEarned = 3000 + Math.min(newStreak, 10) * 500;
+        const pokeballsEarned = DAILY_POKEBALLS_REWARD;
+        const greatballsEarned = DAILY_GREATBALLS_REWARD;
 
         const updatedTrainer = await tx.trainer.update({
           where: { userId: userMeta.userId },

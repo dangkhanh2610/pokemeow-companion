@@ -14,7 +14,12 @@ import {
 } from '../catalog/fishing-catalog';
 import { RARITY_CONFIGS, defaultCreatureCatalog } from '../catalog/creature-catalog';
 import { defaultCatchStrategyRegistry } from '../engine/catch-strategy';
-import { applyXp, computeIvSummary, defaultSpawnEngine } from '../engine/spawn-engine';
+import {
+  applyXp,
+  calculateCatchCoins,
+  computeIvSummary,
+  defaultSpawnEngine,
+} from '../engine/spawn-engine';
 import type {
   BaitId,
   BallId,
@@ -537,9 +542,7 @@ export class FishingService {
         const { ivTotal, ivPercent } = computeIvSummary(ivs);
 
         if (caught) {
-          const coinsEarned = Math.round(
-            (enc.isShiny ? species.baseReward * 3 : species.baseReward) * 1.2,
-          );
+          const coinsEarned = calculateCatchCoins(species.baseReward, enc.isShiny, 'fishing');
           const fishingTokensEarned = calculateFishingTokens(species.rarity, enc.isShiny);
           const rawXp = RARITY_CONFIGS[species.rarity].xpReward * (enc.isShiny ? 2 : 1);
           const xpEarned = Math.round(rawXp * (buddy ? 1.15 : 1));

@@ -49,6 +49,8 @@ export type ChallengerOverviewItem = ChallengerSpec & {
   readonly lineupNames: readonly string[];
 };
 
+export const CHALLENGER_REMATCH_COIN_RATE = 0.4;
+
 // Thứ tự 13 Challenger chuẩn PokéMeow: 8 Kanto Gym Leaders -> Elite Four -> Champion Blue (mỗi người đội hình 3 Pokémon)
 export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
   {
@@ -66,7 +68,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 140, level: 11 }, // Kabuto
       { speciesId: 95, level: 13 }, // Onix
     ],
-    rewardCoins: 2500,
+    rewardCoins: 5000,
     rewardBall: 'greatball',
     rewardQty: 3,
   },
@@ -85,7 +87,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 120, level: 19 }, // Staryu
       { speciesId: 121, level: 21 }, // Starmie
     ],
-    rewardCoins: 4000,
+    rewardCoins: 8000,
     rewardBall: 'ultraball',
     rewardQty: 3,
   },
@@ -104,7 +106,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 25, level: 26 }, // Pikachu
       { speciesId: 26, level: 28 }, // Raichu
     ],
-    rewardCoins: 6000,
+    rewardCoins: 12000,
     rewardBall: 'premierball',
     rewardQty: 1,
   },
@@ -123,7 +125,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 114, level: 33 }, // Tangela
       { speciesId: 45, level: 35 }, // Vileplume
     ],
-    rewardCoins: 8500,
+    rewardCoins: 16000,
     rewardBall: 'premierball',
     rewardQty: 2,
   },
@@ -142,7 +144,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 89, level: 41 }, // Muk
       { speciesId: 110, level: 43 }, // Weezing
     ],
-    rewardCoins: 11500,
+    rewardCoins: 22000,
     rewardBall: 'premierball',
     rewardQty: 2,
   },
@@ -161,7 +163,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 122, level: 48 }, // Mr. Mime
       { speciesId: 65, level: 50 }, // Alakazam
     ],
-    rewardCoins: 15000,
+    rewardCoins: 28000,
     rewardBall: 'premierball',
     rewardQty: 3,
   },
@@ -180,7 +182,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 78, level: 56 }, // Rapidash
       { speciesId: 59, level: 58 }, // Arcanine
     ],
-    rewardCoins: 19000,
+    rewardCoins: 36000,
     rewardBall: 'premierball',
     rewardQty: 3,
   },
@@ -199,7 +201,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 34, level: 64 }, // Nidoking
       { speciesId: 112, level: 66 }, // Rhydon
     ],
-    rewardCoins: 25000,
+    rewardCoins: 48000,
     rewardBall: 'masterball',
     rewardQty: 1,
   },
@@ -218,7 +220,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 91, level: 71 }, // Cloyster
       { speciesId: 131, level: 73 }, // Lapras
     ],
-    rewardCoins: 30000,
+    rewardCoins: 55000,
     rewardBall: 'premierball',
     rewardQty: 3,
   },
@@ -237,7 +239,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 107, level: 74 }, // Hitmonchan
       { speciesId: 68, level: 76 }, // Machamp
     ],
-    rewardCoins: 34000,
+    rewardCoins: 62000,
     rewardBall: 'premierball',
     rewardQty: 3,
   },
@@ -256,7 +258,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 24, level: 77 }, // Arbok
       { speciesId: 94, level: 79 }, // Gengar
     ],
-    rewardCoins: 38000,
+    rewardCoins: 70000,
     rewardBall: 'premierball',
     rewardQty: 4,
   },
@@ -275,7 +277,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 142, level: 81 }, // Aerodactyl
       { speciesId: 149, level: 83 }, // Dragonite
     ],
-    rewardCoins: 45000,
+    rewardCoins: 82000,
     rewardBall: 'premierball',
     rewardQty: 5,
   },
@@ -294,7 +296,7 @@ export const CHALLENGER_ROSTER: readonly ChallengerSpec[] = [
       { speciesId: 65, level: 88 }, // Alakazam
       { speciesId: 6, level: 90 }, // Charizard
     ],
-    rewardCoins: 60000,
+    rewardCoins: 100000,
     rewardBall: 'masterball',
     rewardQty: 2,
   },
@@ -1022,7 +1024,7 @@ export class BattleService {
           where: { userId: winnerUserId },
         });
 
-        let coinsEarned = 400 + aceEnemy.level * 25;
+        let coinsEarned = 1200 + aceEnemy.level * 50;
         let trainerXpEarned = 75 + aceEnemy.level * 4;
         let buddyXpEarned = 45 + aceEnemy.level * 7;
         let firstClearBadgeName: string | undefined;
@@ -1053,12 +1055,12 @@ export class BattleService {
               },
             });
           } else {
-            coinsEarned = Math.round(session.gymSpec.rewardCoins * 0.25);
+            coinsEarned = Math.round(session.gymSpec.rewardCoins * CHALLENGER_REMATCH_COIN_RATE);
             trainerXpEarned = 100 + session.gymSpec.stage * 20;
             buddyXpEarned = 55 + aceEnemy.level * 5;
           }
         } else if (session.mode === 'PVP') {
-          coinsEarned = 800;
+          coinsEarned = 2500;
           trainerXpEarned = 120;
           buddyXpEarned = 160;
         }

@@ -10,6 +10,24 @@ export const MAX_CREATURE_LEVEL = 100;
 const MAX_SINGLE_IV = 31;
 const MAX_TOTAL_IV = 186;
 
+export const CATCH_COIN_MULTIPLIER = 2.5;
+export const SHINY_COIN_MULTIPLIER = 3;
+export const FISHING_COIN_BONUS_MULTIPLIER = 1.2;
+
+/**
+ * Single source of truth for PokéCoin rewards when catching a wild or fished Pokémon.
+ */
+export function calculateCatchCoins(
+  baseReward: number,
+  isShiny: boolean,
+  source: 'wild' | 'fishing' = 'wild',
+): number {
+  const safeBase = Math.max(0, baseReward);
+  const shinyFactor = isShiny ? SHINY_COIN_MULTIPLIER : 1;
+  const sourceFactor = source === 'fishing' ? FISHING_COIN_BONUS_MULTIPLIER : 1;
+  return Math.round(safeBase * CATCH_COIN_MULTIPLIER * shinyFactor * sourceFactor);
+}
+
 export const BUDDY_CATCH_XP_BY_RARITY: Readonly<Record<RarityTier, number>> = {
   common: 35,
   uncommon: 65,

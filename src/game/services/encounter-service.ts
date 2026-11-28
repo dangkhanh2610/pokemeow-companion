@@ -5,6 +5,7 @@ import { defaultCreatureCatalog, RARITY_CONFIGS } from '../catalog/creature-cata
 import { defaultCatchStrategyRegistry } from '../engine/catch-strategy';
 import {
   applyXp,
+  calculateCatchCoins,
   computeIvSummary,
   defaultSpawnEngine,
 } from '../engine/spawn-engine';
@@ -418,7 +419,11 @@ export class EncounterService {
           const { ivTotal, ivPercent } = computeIvSummary(ivs);
 
           if (caught) {
-            const coinsEarned = encounter.isShiny ? species.baseReward * 3 : species.baseReward;
+            const coinsEarned = calculateCatchCoins(
+              species.baseReward,
+              encounter.isShiny,
+              'wild',
+            );
             const rawXp =
               RARITY_CONFIGS[species.rarity].xpReward * (encounter.isShiny ? 2 : 1);
             const xpEarned = Math.round(rawXp * (buddy ? 1.15 : 1));

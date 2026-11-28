@@ -23,8 +23,17 @@ import {
   type BattleStatusCondition,
   type CombatantState,
 } from '@/game/engine/battle-engine';
-import type { BattleSessionView, ChallengerOverviewItem } from '@/game/services/battle-service';
-import type { CaptchaView, VerifyCaptchaOutcome } from '@/game/services/captcha-service';
+import {
+  CHALLENGER_REMATCH_COIN_RATE,
+  type BattleSessionView,
+  type ChallengerOverviewItem,
+} from '@/game/services/battle-service';
+import {
+  CAPTCHA_REWARD_BALLS,
+  CAPTCHA_REWARD_COINS,
+  type CaptchaView,
+  type VerifyCaptchaOutcome,
+} from '@/game/services/captcha-service';
 import {
   TRAIN_COST_PER_LEVEL,
   type BuddyView,
@@ -53,6 +62,7 @@ import type {
 import type { BallId, RarityTier } from '@/game/types';
 import { botEmojiRegistry } from '../emoji-registry';
 import { renderBattleSceneAttachment } from './battle-scene';
+import { CAPTCHA_IMAGE_FILENAME, renderCaptchaImage } from './captcha-image';
 
 function formatNumber(n: number): string {
   return n.toLocaleString('en-US');
@@ -127,7 +137,11 @@ function formatStatusTag(status: BattleStatusCondition, steelGuardTurns: number)
 
 // ======================= ANTI-MACRO CAPTCHA =======================
 
-export function buildCaptchaEmbed(displayName: string, captcha: CaptchaView): EmbedBuilder {
+export function buildCaptchaEmbed(
+  displayName: string,
+  captcha: CaptchaView,
+  prefix = ';',
+): EmbedBuilder {
   const timerIcon = botEmojiRegistry.getTimerMention();
   const embed = new EmbedBuilder()
     .setColor(0xf59e0b)
@@ -135,26 +149,42 @@ export function buildCaptchaEmbed(displayName: string, captcha: CaptchaView): Em
     .setDescription(
       [
         `${timerIcon} ${captcha.question}`,
+        `Bấm nút **Nhập Mã Số** bên dưới hoặc gõ \`${prefix}verify <5 số>\` (ví dụ: \`${prefix}verify 12345\`).`,
         `Lần thử: **${captcha.attempts}/3** (sai 3 lần sẽ tạm khóa 5 phút)`,
       ].join('\n'),
     )
-    .setFooter({ text: 'PokeNyan  ·  Hoàn thành để nhận +300 PC & +1 Poké Ball' });
+    .setImage(`attachment://${CAPTCHA_IMAGE_FILENAME}`)
+    .setFooter({
+      text: `PokeNyan  ·  Hoàn thành để nhận +${formatNumber(CAPTCHA_REWARD_COINS)} PC & +${CAPTCHA_REWARD_BALLS} Poké Ball`,
+    });
 
-  if (captcha.spriteUrl) {
-    embed.setImage(captcha.spriteUrl);
-  }
   return embed;
 }
 
 export function buildCaptchaButtonsRow(captcha: CaptchaView): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    captcha.options.map((name, idx) =>
-      new ButtonBuilder()
-        .setCustomId(`captcha:opt:${captcha.userId}:${idx}`)
-        .setLabel(name)
-        .setStyle(ButtonStyle.Primary),
-    ),
+    new ButtonBuilder()
+      .setCustomId(`captcha:modal:${captcha.userId}`)
+      .setLabel('Nhập Mã Số')
+      .setStyle(ButtonStyle.Primary),
   );
+}
+
+export async function buildCaptchaReplyPayload(
+  displayName: string,
+  captcha: CaptchaView,
+  prefix = ';',
+): Promise<{
+  readonly embeds: EmbedBuilder[];
+  readonly components: ActionRowBuilder<ButtonBuilder>[];
+  readonly files: AttachmentBuilder[];
+}> {
+  const imageAttachment = await renderCaptchaImage(captcha.code);
+  return {
+    embeds: [buildCaptchaEmbed(displayName, captcha, prefix)],
+    components: [buildCaptchaButtonsRow(captcha)],
+    files: [imageAttachment],
+  };
 }
 
 export function buildCaptchaSuccessEmbed(
@@ -769,7 +799,7 @@ function formatChallengerRow(c: ChallengerOverviewItem): string {
       : '`[KHÓA]`';
   const lineupStr = c.lineupNames.join(' · ');
   const rewardNote = c.cleared
-    ? `*Tái đấu ${coinIcon} ${formatNumber(Math.round(c.rewardCoins * 0.25))}*`
+    ? `*Tái đấu ${coinIcon} ${formatNumber(Math.round(c.rewardCoins * CHALLENGER_REMATCH_COIN_RATE))}*`
     : `${coinIcon} **${formatNumber(c.rewardCoins)}** + ${ballIcon} **${c.rewardQty}x**`;
 
   return `${prefixMark} ${typeIcon} **${c.leaderName}** (\`Lv.${c.level}\`) — ${rewardNote}\n└ *${lineupStr}*`;
