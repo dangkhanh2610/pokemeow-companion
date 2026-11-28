@@ -5,6 +5,7 @@ import { defaultCreatureCatalog } from '../catalog/creature-catalog';
 import { resolveEquippedMoves, type MoveSpec } from '../catalog/move-catalog';
 import rawEvolutionsData from '../data/evolutions.json';
 import { creatureXpNeeded, MAX_CREATURE_LEVEL } from '../engine/spawn-engine';
+import { DAILY_PLAY_LIMIT, resolveDailyTurnsUsed } from './play-guard-service';
 
 export const OFFICIAL_GYM_BADGE_IDS: ReadonlySet<string> = new Set([
   'boulder',
@@ -45,6 +46,8 @@ export interface TrainerBagSummary {
   readonly gymBadges: readonly string[];
   readonly officialGymBadgeCount: number;
   readonly battleWins: number;
+  readonly dailyTurnsUsed: number;
+  readonly dailyTurnsLimit: number;
   readonly buddy: {
     readonly speciesName: string;
     readonly level: number;
@@ -725,6 +728,8 @@ export class TrainerService {
       gymBadges: trainer.gymBadges,
       officialGymBadgeCount: trainer.gymBadges.filter((b) => OFFICIAL_GYM_BADGE_IDS.has(b)).length,
       battleWins: trainer.battleWins,
+      dailyTurnsUsed: resolveDailyTurnsUsed(trainer.dailyTurnsUsed, trainer.dailyTurnsDate),
+      dailyTurnsLimit: DAILY_PLAY_LIMIT,
       buddy: buddyRow,
       balls,
       topCreatures,

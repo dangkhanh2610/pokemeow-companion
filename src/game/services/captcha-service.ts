@@ -1,14 +1,21 @@
 import { Prisma } from '@prisma/client';
 import { getPrismaClient, withDbRetry } from '@/lib/prisma';
+import { commandSpamGuard } from './play-guard-service';
 import { trainerService, type TrainerIdentityInput } from './trainer-service';
 
-const CAPTCHA_MIN_THRESHOLD = 80;
-const CAPTCHA_MAX_THRESHOLD = 100;
+const CAPTCHA_MIN_THRESHOLD = 45;
+const CAPTCHA_MAX_THRESHOLD = 65;
 const CAPTCHA_MAX_ATTEMPTS = 3;
 const CAPTCHA_PENALTY_MS = 5 * 60 * 1000;
 export const CAPTCHA_CODE_LENGTH = 5;
 export const CAPTCHA_REWARD_COINS = 1000;
 export const CAPTCHA_REWARD_BALLS = 2;
+
+const pendingCaptchaUsers = new Set<string>();
+
+export function hasPendingCaptchaHint(userId: string): boolean {
+  return pendingCaptchaUsers.has(userId);
+}
 
 export interface CaptchaView {
   readonly userId: string;
@@ -53,16 +60,20 @@ function isValidNumericCode(value: string): boolean {
   return NUMERIC_CODE_REGEX.test(value);
 }
 
-function buildCaptchaChallengeData(): {
+function buildCaptchaChallengeData(reason: 'PERIODIC' | 'SPAM' = 'PERIODIC'): {
   readonly speciesId: number;
   readonly question: string;
   readonly correctAnswer: string;
   readonly options: readonly string[];
 } {
   const code = generateCaptchaCode();
+  const question =
+    reason === 'SPAM'
+      ? `Hệ thống phát hiện thao tác liên tục quá nhanh! Hãy nhập chính xác **${CAPTCHA_CODE_LENGTH} chữ số** hiển thị trong ảnh bên dưới để tiếp tục chơi!`
+      : `Hệ thống chống tool tự động: Hãy nhập chính xác **${CAPTCHA_CODE_LENGTH} chữ số** hiển thị trong ảnh bên dưới để tiếp tục chơi!`;
   return {
     speciesId: 0,
-    question: `Hệ thống chống tool tự động: Hãy nhập chính xác **${CAPTCHA_CODE_LENGTH} chữ số** hiển thị trong ảnh bên dưới để tiếp tục chơi!`,
+    question,
     correctAnswer: code,
     options: [],
   };
@@ -96,8 +107,10 @@ export class CaptchaService {
       prisma.captchaChallenge.findUnique({ where: { userId } }),
     );
     if (!row) {
+      pendingCaptchaUsers.delete(userId);
       return null;
     }
+    pendingCaptchaUsers.add(userId);
     if (!isValidNumericCode(row.correctAnswer)) {
       const refreshed = buildCaptchaChallengeData();
       const updated = await withDbRetry(() =>
@@ -131,6 +144,7 @@ export class CaptchaService {
     );
 
     if (existing) {
+      pendingCaptchaUsers.add(userId);
       if (!isValidNumericCode(existing.correctAnswer)) {
         const refreshed = buildCaptchaChallengeData();
         const updated = await withDbRetry(() =>
@@ -152,6 +166,7 @@ export class CaptchaService {
     }
 
     if (!trainer || trainer.actionsSinceVerify < trainer.nextVerifyThreshold) {
+      pendingCaptchaUsers.delete(userId);
       return null;
     }
 
@@ -177,6 +192,47 @@ export class CaptchaService {
       }),
     );
 
+    pendingCaptchaUsers.add(userId);
+    return toCaptchaView(created);
+  }
+
+  public async forceTriggerChallenge(
+    userMeta: TrainerIdentityInput,
+    reason: 'SPAM' | 'PERIODIC' = 'SPAM',
+  ): Promise<CaptchaView> {
+    await trainerService.ensureTrainer(userMeta);
+    const prisma = getPrismaClient();
+    const existing = await withDbRetry(() =>
+      prisma.captchaChallenge.findUnique({ where: { userId: userMeta.userId } }),
+    );
+    if (existing && isValidNumericCode(existing.correctAnswer)) {
+      pendingCaptchaUsers.add(userMeta.userId);
+      return toCaptchaView(existing);
+    }
+
+    const payload = buildCaptchaChallengeData(reason);
+    const created = await withDbRetry(() =>
+      prisma.captchaChallenge.upsert({
+        where: { userId: userMeta.userId },
+        update: {
+          speciesId: payload.speciesId,
+          question: payload.question,
+          correctAnswer: payload.correctAnswer,
+          optionsJson: [...payload.options],
+          attempts: 0,
+          penaltyUntil: null,
+        },
+        create: {
+          userId: userMeta.userId,
+          speciesId: payload.speciesId,
+          question: payload.question,
+          correctAnswer: payload.correctAnswer,
+          optionsJson: [...payload.options],
+        },
+      }),
+    );
+
+    pendingCaptchaUsers.add(userMeta.userId);
     return toCaptchaView(created);
   }
 
@@ -189,7 +245,7 @@ export class CaptchaService {
     const prisma = getPrismaClient();
     const trimmed = rawAnswer.trim();
 
-    return withDbRetry(() =>
+    const outcome = await withDbRetry(() =>
       prisma.$transaction(async (tx) => {
         const existingTx = await tx.economyTransaction.findUnique({
           where: { idempotencyKey },
@@ -205,7 +261,7 @@ export class CaptchaService {
             rewardPokeballs: CAPTCHA_REWARD_BALLS,
             newCoinsBalance: trainer.coins,
             nextVerifyThreshold: trainer.nextVerifyThreshold,
-          };
+          } satisfies VerifyCaptchaOutcome;
         }
 
         const challenge = await tx.captchaChallenge.findUnique({
@@ -217,7 +273,7 @@ export class CaptchaService {
             ok: false,
             reason: 'NO_ACTIVE_CAPTCHA',
             message: 'Bạn hiện không có yêu cầu xác minh nào. Cứ tiếp tục bắt Pokémon bình thường nhé!',
-          };
+          } satisfies VerifyCaptchaOutcome;
         }
 
         const now = new Date();
@@ -228,7 +284,7 @@ export class CaptchaService {
             reason: 'PENALTY_LOCKED',
             penaltyUntil: challenge.penaltyUntil,
             message: `Bạn đã nhập sai 3 lần nên bị tạm khóa xác minh trong **${sec} giây** nữa.`,
-          };
+          } satisfies VerifyCaptchaOutcome;
         }
 
         const normalized = trimmed.replace(/\s+/g, '');
@@ -284,7 +340,7 @@ export class CaptchaService {
             rewardPokeballs: CAPTCHA_REWARD_BALLS,
             newCoinsBalance: updatedTrainer.coins,
             nextVerifyThreshold: nextThreshold,
-          };
+          } satisfies VerifyCaptchaOutcome;
         }
 
         const nextAttempts = challenge.attempts + 1;
@@ -309,7 +365,7 @@ export class CaptchaService {
             remainingAttempts: 0,
             penaltyUntil,
             updatedChallenge: toCaptchaView(updated),
-          };
+          } satisfies VerifyCaptchaOutcome;
         }
 
         const updated = await tx.captchaChallenge.update({
@@ -323,9 +379,20 @@ export class CaptchaService {
           remainingAttempts: CAPTCHA_MAX_ATTEMPTS - nextAttempts,
           penaltyUntil: null,
           updatedChallenge: toCaptchaView(updated),
-        };
+        } satisfies VerifyCaptchaOutcome;
       }),
     );
+
+    if (outcome.ok && outcome.correct) {
+      pendingCaptchaUsers.delete(userMeta.userId);
+      commandSpamGuard.resetUser(userMeta.userId);
+    } else if ((outcome.ok && !outcome.correct) || (!outcome.ok && outcome.reason === 'PENALTY_LOCKED')) {
+      pendingCaptchaUsers.add(userMeta.userId);
+    } else if (!outcome.ok && outcome.reason === 'NO_ACTIVE_CAPTCHA') {
+      pendingCaptchaUsers.delete(userMeta.userId);
+    }
+
+    return outcome;
   }
 }
 

@@ -36,6 +36,12 @@ import {
   tryAcquireEncounterLock,
 } from './activity-lock';
 import { awardBuddyCatchXpInTx } from './evolution-service';
+import {
+  DAILY_PLAY_LIMIT,
+  getNextVietnamMidnight,
+  getVietnamDayKey,
+  resolveDailyTurnsUsed,
+} from './play-guard-service';
 import { questService } from './quest-service';
 import {
   emptyBallInventory,
@@ -63,8 +69,10 @@ export type CastRodOutcome =
         | 'ACTIVE_FISHING'
         | 'ACTIVE_WILD_ENCOUNTER'
         | 'SPAWN_IN_FLIGHT'
-        | 'CAPTCHA_REQUIRED';
+        | 'CAPTCHA_REQUIRED'
+        | 'DAILY_LIMIT_REACHED';
       readonly remainingMs?: number;
+      readonly resetsAt?: Date;
       readonly species?: CreatureSpecies;
       readonly captcha?: CaptchaView;
     };
@@ -281,6 +289,20 @@ export class FishingService {
             return { ok: false, reason: 'ACTIVE_FISHING' };
           }
 
+          const todayKey = getVietnamDayKey(now);
+          const usedToday = resolveDailyTurnsUsed(
+            trainer.dailyTurnsUsed,
+            trainer.dailyTurnsDate,
+            now,
+          );
+          if (usedToday >= DAILY_PLAY_LIMIT) {
+            return {
+              ok: false,
+              reason: 'DAILY_LIMIT_REACHED',
+              resetsAt: getNextVietnamMidnight(now),
+            };
+          }
+
           const rod = getRodSpec(trainer.fishingRod);
           const invMap = new Map(trainer.inventory.map((i) => [i.itemId, i.quantity]));
           let baitUsed: BaitId | null = null;
@@ -330,6 +352,8 @@ export class FishingService {
             where: { userId: userMeta.userId },
             data: {
               lastFishAt: now,
+              dailyTurnsUsed: usedToday + 1,
+              dailyTurnsDate: todayKey,
               actionsSinceVerify: { increment: 1 },
             },
           });

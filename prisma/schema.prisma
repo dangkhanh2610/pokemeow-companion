@@ -29,8 +29,10 @@ model Trainer {
   lastFishAt          DateTime?
   gymBadges           String[]             @default([])
   battleWins          Int                  @default(0)
+  dailyTurnsUsed      Int                  @default(0)
+  dailyTurnsDate      String               @default("")
   actionsSinceVerify  Int                  @default(0)
-  nextVerifyThreshold Int                  @default(88)
+  nextVerifyThreshold Int                  @default(55)
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   inventory           InventoryItem[]

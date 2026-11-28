@@ -13,7 +13,15 @@ import {
   type CombatantState,
 } from '../engine/battle-engine';
 import type { BallId, CreatureIVs, CreatureSpecies } from '../types';
+import { captchaService, type CaptchaView } from './captcha-service';
 import { addCreatureXp } from './evolution-service';
+import {
+  DAILY_PLAY_LIMIT,
+  formatDailyLimitMessage,
+  getNextVietnamMidnight,
+  getVietnamDayKey,
+  resolveDailyTurnsUsed,
+} from './play-guard-service';
 import { questService } from './quest-service';
 import { teamService, type TeamMemberView } from './team-service';
 import { OFFICIAL_GYM_BADGE_IDS, trainerService, type TrainerIdentityInput } from './trainer-service';
@@ -357,7 +365,7 @@ interface InternalBattleSession {
 
 export type BattleActionOutcome =
   | { readonly ok: true; readonly battle: BattleSessionView }
-  | { readonly ok: false; readonly message: string };
+  | { readonly ok: false; readonly message: string; readonly captcha?: CaptchaView };
 
 const BATTLE_IDLE_TTL_MS = 5 * 60 * 1000;
 const PERFECT_ENEMY_IVS: CreatureIVs = { hp: 24, atk: 24, def: 24, spAtk: 24, spDef: 24, spd: 24 };
@@ -493,6 +501,40 @@ export class BattleService {
     return undefined;
   }
 
+  private async consumeDailyBattleTurn(
+    userId: string,
+  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly resetsAt: Date }> {
+    const prisma = getPrismaClient();
+    const now = new Date();
+    const todayKey = getVietnamDayKey(now);
+
+    return withDbRetry(() =>
+      prisma.$transaction(async (tx) => {
+        const trainer = await tx.trainer.findUniqueOrThrow({
+          where: { userId },
+          select: { dailyTurnsUsed: true, dailyTurnsDate: true },
+        });
+        const usedToday = resolveDailyTurnsUsed(
+          trainer.dailyTurnsUsed,
+          trainer.dailyTurnsDate,
+          now,
+        );
+        if (usedToday >= DAILY_PLAY_LIMIT) {
+          return { ok: false, resetsAt: getNextVietnamMidnight(now) };
+        }
+        await tx.trainer.update({
+          where: { userId },
+          data: {
+            dailyTurnsUsed: usedToday + 1,
+            dailyTurnsDate: todayKey,
+            actionsSinceVerify: { increment: 1 },
+          },
+        });
+        return { ok: true };
+      }),
+    );
+  }
+
   public async startPve(playerMeta: TrainerIdentityInput): Promise<BattleActionOutcome> {
     await trainerService.ensureTrainer(playerMeta);
     const existing = this.findActiveBattleForUser(playerMeta.userId);
@@ -503,11 +545,28 @@ export class BattleService {
       };
     }
 
+    const pendingCaptcha = await captchaService.checkSpawnGate(playerMeta.userId);
+    if (pendingCaptcha) {
+      return {
+        ok: false,
+        message: pendingCaptcha.question,
+        captcha: pendingCaptcha,
+      };
+    }
+
     const partyA = await teamService.getBattleParty(playerMeta.userId);
     if (partyA.length === 0) {
       return {
         ok: false,
         message: 'Bạn chưa có Pokémon nào trong kho! Hãy dùng `/p` bắt ít nhất 1 Pokémon trước.',
+      };
+    }
+
+    const turnCheck = await this.consumeDailyBattleTurn(playerMeta.userId);
+    if (!turnCheck.ok) {
+      return {
+        ok: false,
+        message: formatDailyLimitMessage(turnCheck.resetsAt),
       };
     }
 
@@ -572,6 +631,15 @@ export class BattleService {
       };
     }
 
+    const pendingCaptcha = await captchaService.checkSpawnGate(playerMeta.userId);
+    if (pendingCaptcha) {
+      return {
+        ok: false,
+        message: pendingCaptcha.question,
+        captcha: pendingCaptcha,
+      };
+    }
+
     const partyA = await teamService.getBattleParty(playerMeta.userId);
     if (partyA.length === 0) {
       return {
@@ -614,6 +682,14 @@ export class BattleService {
 
     if (!gymSpec) {
       return { ok: false, message: 'Không tìm thấy Challenger phù hợp.' };
+    }
+
+    const turnCheck = await this.consumeDailyBattleTurn(playerMeta.userId);
+    if (!turnCheck.ok) {
+      return {
+        ok: false,
+        message: formatDailyLimitMessage(turnCheck.resetsAt),
+      };
     }
 
     const aiMoveCount: 2 | 3 | 4 =

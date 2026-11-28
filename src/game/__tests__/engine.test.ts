@@ -53,6 +53,13 @@ import {
   generateCaptchaCode,
   rollNextCaptchaThreshold,
 } from '../services/captcha-service';
+import {
+  CommandSpamGuard,
+  DAILY_PLAY_LIMIT,
+  getVietnamDayKey,
+  resolveDailyTurnsUsed,
+  SPAM_CAPTCHA_STRIKE_THRESHOLD,
+} from '../services/play-guard-service';
 import { ENCOUNTER_NETWORK_GRACE_MS, ENCOUNTER_TTL_MS } from '../services/encounter-service';
 import { addCreatureXp, getEvolutionBranches } from '../services/evolution-service';
 import { isChannelAllowed, validatePrefix } from '../services/guild-config-service';
@@ -617,10 +624,10 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.equal(grassResist?.mult, 0.25);
     assert.equal(groundImmune?.mult, 0);
 
-    // 6. Captcha threshold range [80..100]
+    // 6. Captcha threshold range [45..65]
     for (let i = 0; i < 30; i += 1) {
       const th = rollNextCaptchaThreshold();
-      assert.ok(th >= 80 && th <= 100);
+      assert.ok(th >= 45 && th <= 65);
     }
 
     // 7. Box command parser & multi-mode sorting (default rarity)
@@ -728,5 +735,58 @@ describe('PokéVerse RPG Core Engine', () => {
     assert.ok(Buffer.isBuffer(attachment.attachment));
     const pngHeader = attachment.attachment.subarray(0, 4);
     assert.deepEqual([...pngHeader], [0x89, 0x50, 0x4e, 0x47]);
+
+    const threshold = rollNextCaptchaThreshold();
+    assert.ok(threshold >= 45 && threshold <= 65);
+  });
+
+  it('PlayGuard: giới hạn 500 lượt/ngày theo giờ VN và chống spam lệnh kích hoạt Captcha', () => {
+    assert.equal(DAILY_PLAY_LIMIT, 500);
+
+    // 2026-11-28T16:59:59Z = 2026-11-28T23:59:59+07:00
+    const beforeVnMidnight = new Date('2026-11-28T16:59:59.000Z');
+    // 2026-11-28T17:00:00Z = 2026-11-29T00:00:00+07:00
+    const atVnMidnight = new Date('2026-11-28T17:00:00.000Z');
+    assert.equal(getVietnamDayKey(beforeVnMidnight), '2026-11-28');
+    assert.equal(getVietnamDayKey(atVnMidnight), '2026-11-29');
+
+    assert.equal(resolveDailyTurnsUsed(499, '2026-11-28', beforeVnMidnight), 499);
+    assert.equal(resolveDailyTurnsUsed(500, '2026-11-28', atVnMidnight), 0);
+
+    const guard = new CommandSpamGuard();
+    const t0 = 1_700_000_000_000;
+    assert.deepEqual(guard.checkAndRecord('u-spam', 'command', t0), { allowed: true });
+
+    // Vi phạm #1 (< 1500ms) -> cảnh báo lần đầu
+    const v1 = guard.checkAndRecord('u-spam', 'command', t0 + 300);
+    assert.equal(v1.allowed, false);
+    if (!v1.allowed) {
+      assert.equal(v1.shouldWarn, true);
+      assert.equal(v1.triggerCaptcha, false);
+    }
+
+    // Vi phạm #2 ngay sau đó (< 4000ms WARN_THROTTLE) -> im lặng để chống flood chat
+    const v2 = guard.checkAndRecord('u-spam', 'command', t0 + 600);
+    assert.equal(v2.allowed, false);
+    if (!v2.allowed) {
+      assert.equal(v2.shouldWarn, false);
+      assert.equal(v2.triggerCaptcha, false);
+    }
+
+    // Vi phạm #3
+    const v3 = guard.checkAndRecord('u-spam', 'command', t0 + 900);
+    assert.equal(v3.allowed, false);
+
+    // Vi phạm #4 = đạt ngưỡng SPAM_CAPTCHA_STRIKE_THRESHOLD -> kích hoạt Captcha
+    assert.equal(SPAM_CAPTCHA_STRIKE_THRESHOLD, 4);
+    const v4 = guard.checkAndRecord('u-spam', 'command', t0 + 1200);
+    assert.equal(v4.allowed, false);
+    if (!v4.allowed) {
+      assert.equal(v4.triggerCaptcha, true);
+    }
+
+    // Reset sau khi giải Captcha
+    guard.resetUser('u-spam');
+    assert.deepEqual(guard.checkAndRecord('u-spam', 'command', t0 + 1300), { allowed: true });
   });
 });

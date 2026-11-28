@@ -24,6 +24,12 @@ import {
   tryAcquireEncounterLock,
 } from './activity-lock';
 import { awardBuddyCatchXpInTx } from './evolution-service';
+import {
+  DAILY_PLAY_LIMIT,
+  getNextVietnamMidnight,
+  getVietnamDayKey,
+  resolveDailyTurnsUsed,
+} from './play-guard-service';
 import { questService } from './quest-service';
 import {
   emptyBallInventory,
@@ -60,8 +66,10 @@ export type SpawnEncounterOutcome =
         | 'ACTIVE_ENCOUNTER_EXISTS'
         | 'ACTIVE_FISHING_EXISTS'
         | 'SPAWN_IN_FLIGHT'
-        | 'CAPTCHA_REQUIRED';
+        | 'CAPTCHA_REQUIRED'
+        | 'DAILY_LIMIT_REACHED';
       readonly remainingMs?: number;
+      readonly resetsAt?: Date;
       readonly species?: CreatureSpecies;
       readonly captcha?: CaptchaView;
     };
@@ -184,6 +192,20 @@ export class EncounterService {
               };
             }
 
+            const todayKey = getVietnamDayKey(now);
+            const usedToday = resolveDailyTurnsUsed(
+              trainer.dailyTurnsUsed,
+              trainer.dailyTurnsDate,
+              now,
+            );
+            if (usedToday >= DAILY_PLAY_LIMIT) {
+              return {
+                ok: false,
+                reason: 'DAILY_LIMIT_REACHED',
+                resetsAt: getNextVietnamMidnight(now),
+              };
+            }
+
             const roll = defaultSpawnEngine.rollEncounter();
             const dbExpiresAt = new Date(
               Date.now() + ENCOUNTER_TTL_MS + ENCOUNTER_NETWORK_GRACE_MS,
@@ -267,6 +289,8 @@ export class EncounterService {
               where: { userId: userMeta.userId },
               data: {
                 lastWildAt: now,
+                dailyTurnsUsed: usedToday + 1,
+                dailyTurnsDate: todayKey,
                 actionsSinceVerify: { increment: 1 },
                 ...(rescueGranted ? { lastRescueAt: now } : {}),
               },

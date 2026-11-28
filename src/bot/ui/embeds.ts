@@ -582,7 +582,7 @@ export function buildProfileEmbed(summary: TrainerBagSummary): EmbedBuilder {
       },
       {
         name: 'Tài Sản & Chuỗi Ngày',
-        value: `${coinIcon} **${formatNumber(summary.coins)} PC**  ·  ${botEmojiRegistry.getTokenMention()} **${formatNumber(summary.fishingTokens)} FT**\nStreak: **${summary.dailyStreak} ngày**`,
+        value: `${coinIcon} **${formatNumber(summary.coins)} PC**  ·  ${botEmojiRegistry.getTokenMention()} **${formatNumber(summary.fishingTokens)} FT**\nStreak: **${summary.dailyStreak} ngày**  ·  Lượt chơi hôm nay: **${summary.dailyTurnsUsed} / ${summary.dailyTurnsLimit}**`,
         inline: true,
       },
       {

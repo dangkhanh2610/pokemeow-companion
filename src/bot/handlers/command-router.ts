@@ -19,7 +19,10 @@ import {
 } from '@/game/services/activity-lock';
 import type { BattleTurnAction } from '@/game/services/battle-service';
 import { battleService } from '@/game/services/battle-service';
-import { captchaService } from '@/game/services/captcha-service';
+import {
+  captchaService,
+  hasPendingCaptchaHint,
+} from '@/game/services/captcha-service';
 import { economyService } from '@/game/services/economy-service';
 import { ENCOUNTER_TTL_MS, encounterService } from '@/game/services/encounter-service';
 import { evolutionService } from '@/game/services/evolution-service';
@@ -37,6 +40,11 @@ import { leaderboardService } from '@/game/services/leaderboard-service';
 import { marketService } from '@/game/services/market-service';
 import { megaService } from '@/game/services/mega-service';
 import { moveShopService } from '@/game/services/move-shop-service';
+import {
+  commandSpamGuard,
+  formatDailyLimitMessage,
+  getNextVietnamMidnight,
+} from '@/game/services/play-guard-service';
 import { questService } from '@/game/services/quest-service';
 import { teamService } from '@/game/services/team-service';
 import {
@@ -176,6 +184,80 @@ function parseUserMentionId(raw: string | undefined): string | null {
 
 const ADMIN_SLASH_COMMANDS = new Set(['bot', 'prefix', 'channel']);
 const ADMIN_PREFIX_COMMANDS = new Set(['bot', 'prefix', 'channel']);
+const CAPTCHA_EXEMPT_COMMANDS = new Set(['verify', 'captcha', 'help', 'h']);
+const KNOWN_PREFIX_COMMANDS: ReadonlySet<string> = new Set([
+  'p',
+  'pokemon',
+  's',
+  'shop',
+  'b',
+  'buy',
+  'i',
+  'inv',
+  'bag',
+  'bal',
+  'coins',
+  'money',
+  'box',
+  'bx',
+  'd',
+  'dex',
+  'pokedex',
+  'fav',
+  'favorite',
+  'f',
+  'fish',
+  'q',
+  'quest',
+  'quests',
+  'bd',
+  'buddy',
+  'ev',
+  'evo',
+  'evolve',
+  'mk',
+  'market',
+  'tr',
+  'trade',
+  'bt',
+  'battle',
+  'gym',
+  'npc',
+  'challenger',
+  'challengers',
+  'team',
+  'party',
+  'tm3',
+  'ms',
+  'moves',
+  'moveshop',
+  'skill',
+  'skills',
+  'learn',
+  'tm',
+  'verify',
+  'captcha',
+  'm',
+  'mega',
+  'info',
+  'v',
+  'view',
+  'pi',
+  'pinfo',
+  'pf',
+  'profile',
+  'stats',
+  'r',
+  'rel',
+  'release',
+  'dl',
+  'daily',
+  'lb',
+  'top',
+  'leaderboard',
+  'help',
+  'h',
+]);
 
 export class BotCommandRouter {
   private readonly defaultPrefix: string;
@@ -500,6 +582,43 @@ export class BotCommandRouter {
       }
     }
 
+    if (!CAPTCHA_EXEMPT_COMMANDS.has(interaction.commandName)) {
+      const spam = commandSpamGuard.checkAndRecord(meta.userId, 'command');
+      if (!spam.allowed) {
+        if (spam.triggerCaptcha) {
+          await interaction.deferReply();
+          const challenge = await captchaService.forceTriggerChallenge(meta, 'SPAM');
+          const payload = await buildCaptchaReplyPayload(meta.displayName, challenge, '/');
+          await interaction.editReply({
+            content: `${crossIcon} **Phát hiện thao tác liên tục quá nhanh!** Hãy nhập mã Captcha bên dưới để tiếp tục.`,
+            embeds: payload.embeds,
+            components: payload.components,
+            files: payload.files,
+          });
+          return;
+        }
+        await interaction.reply({
+          content: `${timerIcon} Bạn thao tác quá nhanh! Vui lòng chờ **${(spam.retryAfterMs / 1000).toFixed(1)}s** rồi thử lại.`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (hasPendingCaptchaHint(meta.userId)) {
+        const activeCap = await captchaService.getActiveChallenge(meta.userId);
+        if (activeCap) {
+          await interaction.deferReply();
+          const payload = await buildCaptchaReplyPayload(meta.displayName, activeCap, '/');
+          await interaction.editReply({
+            embeds: payload.embeds,
+            components: payload.components,
+            files: payload.files,
+          });
+          return;
+        }
+      }
+    }
+
     switch (interaction.commandName) {
       case 'p': {
         await interaction.deferReply();
@@ -512,6 +631,12 @@ export class BotCommandRouter {
               components: payload.components,
               files: payload.files,
             });
+            return;
+          }
+          if (result.reason === 'DAILY_LIMIT_REACHED') {
+            await interaction.editReply(
+              `${timerIcon} ${formatDailyLimitMessage(result.resetsAt ?? getNextVietnamMidnight())}`,
+            );
             return;
           }
           if (result.reason === 'SPAWN_IN_FLIGHT') {
@@ -822,6 +947,12 @@ export class BotCommandRouter {
             });
             return;
           }
+          if (cast.reason === 'DAILY_LIMIT_REACHED') {
+            await interaction.editReply(
+              `${timerIcon} ${formatDailyLimitMessage(cast.resetsAt ?? getNextVietnamMidnight())}`,
+            );
+            return;
+          }
           if (cast.reason === 'SPAWN_IN_FLIGHT') {
             await interaction.editReply(`${timerIcon} Đang xử lý lượt tìm/câu trước đó của bạn...`);
             return;
@@ -1019,6 +1150,15 @@ export class BotCommandRouter {
           }
           const res = await battleService.startGym(meta, stage);
           if (!res.ok) {
+            if (res.captcha) {
+              const payload = await buildCaptchaReplyPayload(meta.displayName, res.captcha, '/');
+              await interaction.editReply({
+                embeds: payload.embeds,
+                components: payload.components,
+                files: payload.files,
+              });
+              return;
+            }
             await interaction.editReply(buildErrorNotice(res.message));
             return;
           }
@@ -1045,6 +1185,15 @@ export class BotCommandRouter {
         }
         const res = await battleService.startPve(meta);
         if (!res.ok) {
+          if (res.captcha) {
+            const payload = await buildCaptchaReplyPayload(meta.displayName, res.captcha, '/');
+            await interaction.editReply({
+              embeds: payload.embeds,
+              components: payload.components,
+              files: payload.files,
+            });
+            return;
+          }
           await interaction.editReply(buildErrorNotice(res.message));
           return;
         }
@@ -1393,6 +1542,54 @@ export class BotCommandRouter {
       return;
     }
 
+    if (!KNOWN_PREFIX_COMMANDS.has(command)) {
+      return;
+    }
+
+    if (!CAPTCHA_EXEMPT_COMMANDS.has(command)) {
+      const spam = commandSpamGuard.checkAndRecord(meta.userId, 'command');
+      if (!spam.allowed) {
+        if (spam.triggerCaptcha) {
+          const challenge = await captchaService.forceTriggerChallenge(meta, 'SPAM');
+          const payload = await buildCaptchaReplyPayload(
+            meta.displayName,
+            challenge,
+            settings.prefix,
+          );
+          await message.reply({
+            content: `${crossIcon} **Phát hiện spam lệnh liên tục!** Hãy nhập mã Captcha bên dưới để mở khóa.`,
+            embeds: payload.embeds,
+            components: payload.components,
+            files: payload.files,
+          });
+          return;
+        }
+        if (spam.shouldWarn) {
+          await message.reply(
+            `${timerIcon} Bạn gõ lệnh quá nhanh! Chờ **${(spam.retryAfterMs / 1000).toFixed(1)}s** rồi thử lại nhé.`,
+          );
+        }
+        return;
+      }
+
+      if (hasPendingCaptchaHint(meta.userId)) {
+        const activeCap = await captchaService.getActiveChallenge(meta.userId);
+        if (activeCap) {
+          const payload = await buildCaptchaReplyPayload(
+            meta.displayName,
+            activeCap,
+            settings.prefix,
+          );
+          await message.reply({
+            embeds: payload.embeds,
+            components: payload.components,
+            files: payload.files,
+          });
+          return;
+        }
+      }
+    }
+
     switch (command) {
       case 'p':
       case 'pokemon': {
@@ -1409,6 +1606,12 @@ export class BotCommandRouter {
               components: payload.components,
               files: payload.files,
             });
+            return;
+          }
+          if (result.reason === 'DAILY_LIMIT_REACHED') {
+            await message.reply(
+              `${timerIcon} ${formatDailyLimitMessage(result.resetsAt ?? getNextVietnamMidnight())}`,
+            );
             return;
           }
           if (result.reason === 'SPAWN_IN_FLIGHT') {
@@ -1595,6 +1798,12 @@ export class BotCommandRouter {
               components: payload.components,
               files: payload.files,
             });
+            return;
+          }
+          if (cast.reason === 'DAILY_LIMIT_REACHED') {
+            await message.reply(
+              `${timerIcon} ${formatDailyLimitMessage(cast.resetsAt ?? getNextVietnamMidnight())}`,
+            );
             return;
           }
           if (cast.reason === 'SPAWN_IN_FLIGHT') {
@@ -1901,6 +2110,19 @@ export class BotCommandRouter {
           const stage = Number.parseInt(gymArg!, 10);
           const res = await battleService.startGym(meta, stage);
           if (!res.ok) {
+            if (res.captcha) {
+              const payload = await buildCaptchaReplyPayload(
+                meta.displayName,
+                res.captcha,
+                settings.prefix,
+              );
+              await message.reply({
+                embeds: payload.embeds,
+                components: payload.components,
+                files: payload.files,
+              });
+              return;
+            }
             await message.reply(buildErrorNotice(res.message));
             return;
           }
@@ -1934,6 +2156,19 @@ export class BotCommandRouter {
         }
         const res = await battleService.startPve(meta);
         if (!res.ok) {
+          if (res.captcha) {
+            const payload = await buildCaptchaReplyPayload(
+              meta.displayName,
+              res.captcha,
+              settings.prefix,
+            );
+            await message.reply({
+              embeds: payload.embeds,
+              components: payload.components,
+              files: payload.files,
+            });
+            return;
+          }
           await message.reply(buildErrorNotice(res.message));
           return;
         }
@@ -2287,6 +2522,34 @@ export class BotCommandRouter {
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     const crossIcon = botEmojiRegistry.getCrossMention();
     const timerIcon = botEmojiRegistry.getTimerMention();
+
+    if (!interaction.customId.startsWith('captcha:')) {
+      const spam = commandSpamGuard.checkAndRecord(interaction.user.id, 'interaction');
+      if (!spam.allowed) {
+        if (spam.triggerCaptcha) {
+          await interaction.deferReply();
+          const meta = extractTrainerMeta(interaction.user);
+          const challenge = await captchaService.forceTriggerChallenge(meta, 'SPAM');
+          const payload = await buildCaptchaReplyPayload(
+            meta.displayName,
+            challenge,
+            this.defaultPrefix,
+          );
+          await interaction.editReply({
+            content: `${crossIcon} **Phát hiện bấm nút liên tục quá nhanh!** Hãy nhập mã Captcha bên dưới để mở khóa.`,
+            embeds: payload.embeds,
+            components: payload.components,
+            files: payload.files,
+          });
+          return;
+        }
+        await interaction.reply({
+          content: `${timerIcon} Bạn bấm quá nhanh! Chờ **${(spam.retryAfterMs / 1000).toFixed(1)}s** nhé.`,
+          ephemeral: true,
+        });
+        return;
+      }
+    }
 
     if (interaction.customId.startsWith('mega:')) {
       await interaction.deferUpdate();
@@ -2877,6 +3140,33 @@ export class BotCommandRouter {
   ): Promise<void> {
     const crossIcon = botEmojiRegistry.getCrossMention();
     const checkIcon = botEmojiRegistry.getCheckMention();
+    const timerIcon = botEmojiRegistry.getTimerMention();
+
+    const spam = commandSpamGuard.checkAndRecord(interaction.user.id, 'interaction');
+    if (!spam.allowed) {
+      if (spam.triggerCaptcha) {
+        await interaction.deferReply();
+        const meta = extractTrainerMeta(interaction.user);
+        const challenge = await captchaService.forceTriggerChallenge(meta, 'SPAM');
+        const payload = await buildCaptchaReplyPayload(
+          meta.displayName,
+          challenge,
+          this.defaultPrefix,
+        );
+        await interaction.editReply({
+          content: `${crossIcon} **Phát hiện thao tác liên tục quá nhanh!** Hãy nhập mã Captcha bên dưới để mở khóa.`,
+          embeds: payload.embeds,
+          components: payload.components,
+          files: payload.files,
+        });
+        return;
+      }
+      await interaction.reply({
+        content: `${timerIcon} Thao tác quá nhanh! Chờ **${(spam.retryAfterMs / 1000).toFixed(1)}s** nhé.`,
+        ephemeral: true,
+      });
+      return;
+    }
 
     if (interaction.customId.startsWith('boxsort:')) {
       await interaction.deferUpdate();
@@ -2920,6 +3210,20 @@ export class BotCommandRouter {
       const meta = extractTrainerMeta(interaction.user);
       const res = await battleService.startGym(meta, Number.isNaN(stage) ? 1 : stage);
       if (!res.ok) {
+        if (res.captcha) {
+          const payload = await buildCaptchaReplyPayload(
+            meta.displayName,
+            res.captcha,
+            this.defaultPrefix,
+          );
+          await interaction.followUp({
+            embeds: payload.embeds,
+            components: payload.components,
+            files: payload.files,
+            ephemeral: false,
+          });
+          return;
+        }
         await interaction.followUp({ content: buildErrorNotice(res.message), ephemeral: true });
         return;
       }
